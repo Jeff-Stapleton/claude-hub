@@ -9,7 +9,9 @@ import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { registerActivityRoutes } from './routes/activity.js';
 import { registerChannelRoutes } from './routes/channels.js';
+import { registerOrchestratorRoutes } from './routes/orchestrator.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerStateRoutes } from './routes/state.js';
 import { registerTriggerRoutes } from './routes/triggers.js';
@@ -76,6 +78,8 @@ async function main(): Promise<void> {
   await registerProjectRoutes(app, store);
   await registerTriggerRoutes(app, store, triggerRunner);
   await registerChannelRoutes(app, store);
+  await registerActivityRoutes(app, store);
+  await registerOrchestratorRoutes(app, store);
 
   // Serve the built web bundle if present. In dev, the Vite server on :5173
   // proxies /api and /ws here; this static branch only matters for

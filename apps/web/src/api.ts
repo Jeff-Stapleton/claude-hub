@@ -70,4 +70,10 @@ export const api = {
     req<{ ok: true }>(`/api/triggers/${encodeURIComponent(id)}/run`, { method: 'POST' }),
   listRuns: (id: string) =>
     req<TriggerRunRecord[]>(`/api/triggers/${encodeURIComponent(id)}/runs`),
+  listActivity: () =>
+    req<Array<{ kind: 'trigger-run'; run: TriggerRunRecord; triggerName: string }>>(
+      '/api/activity',
+    ),
+  clearOrchestratorSessions: () =>
+    req<{ ok: true }>('/api/orchestrator/clear-sessions', { method: 'POST' }),
 };
