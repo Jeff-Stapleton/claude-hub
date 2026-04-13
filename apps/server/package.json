@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@claude-hub/cc-config-reader": "workspace:*",
+    "@claude-hub/cc-runner": "workspace:*",
     "@claude-hub/core": "workspace:*",
     "@claude-hub/triggers": "workspace:*",
     "@fastify/static": "^8.0.1",

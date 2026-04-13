@@ -1,10 +1,16 @@
 import type { Store } from '@claude-hub/core';
+import { spawnProjectSession } from '@claude-hub/cc-runner';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
 interface AddProjectBody {
   path: string;
   alias?: string;
+}
+
+interface SpawnBody {
+  prompt: string;
+  sessionId?: string;
 }
 
 /**
@@ -39,4 +45,38 @@ export async function registerProjectRoutes(app: FastifyInstance, store: Store):
     }
     return { ok: true };
   });
+
+  /**
+   * Synchronous one-shot spawn of Claude Code in a project's dir. Intended
+   * for the orchestrator's hub-MCP tool, which needs the transcript inline
+   * rather than fire-and-forget. Timeout is enforced by cc-runner.
+   */
+  app.post<{ Params: { id: string }; Body: SpawnBody }>(
+    '/api/projects/:id/spawn',
+    async (req, reply) => {
+      const { id } = req.params;
+      const project = store.projects().find((p) => p.id === id);
+      if (!project) return reply.code(404).send({ error: 'project not found' });
+
+      const { prompt, sessionId } = req.body ?? ({} as SpawnBody);
+      if (!prompt || typeof prompt !== 'string') {
+        return reply.code(400).send({ error: 'prompt is required' });
+      }
+
+      const result = await spawnProjectSession({
+        cwd: project.path,
+        prompt,
+        ...(sessionId ? { sessionId } : {}),
+      });
+      if (!result.ok) {
+        return reply.code(500).send({ error: result.error, stderr: result.stderr });
+      }
+      return {
+        sessionId: result.sessionId,
+        text: result.text,
+        durationMs: result.durationMs,
+        ...(result.costUsd !== undefined ? { costUsd: result.costUsd } : {}),
+      };
+    },
+  );
 }
