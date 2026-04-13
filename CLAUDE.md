@@ -95,6 +95,16 @@ If you add a new secret field:
 2. If it's user-generated, show plaintext **exactly once** in the create-response. There is intentionally no "reveal" endpoint — users re-create if they lose it.
 3. Verify with `timingSafeEqual` (see `packages/triggers/src/webhook.ts`).
 
+### Discord gotchas (these bit us, documented so you don't rediscover)
+
+- **Bot tokens are exclusive.** Discord allows only one active gateway connection per bot token. If two processes (e.g. the hub and OpenClaw, or two hub restarts racing) use the same token, one silently loses its session and stops receiving events, while both may still appear connected. The `Events.Invalidated` listener in `packages/channels/src/discord.ts` catches one direction of this; the other direction is harder to detect. **Use a dedicated bot application per tool.**
+
+- **discord.js v14 silently drops DMs.** In 14.16.3 (verified via live debug session — commit `feb6ded`), the typed `MessageCreate` event never fires for direct messages despite the raw `MESSAGE_CREATE` dispatch arriving. Partials (`Channel`, `Message`, `User`, `GuildMember`) and intents (`DirectMessages` + `MessageContent`) were all set correctly; no `Warn` or `Debug` line was emitted. We work around it by driving DM delivery off the raw gateway event in `DiscordChannelAdapter`. Guild messages still flow through the typed `MessageCreate` handler. If you upgrade `discord.js`, test a live DM end-to-end before removing the raw path — raw works regardless, so the workaround is safe to keep indefinitely.
+
+- **Privileged intents must be enabled in the Developer Portal** per bot application. A fresh bot rejects `MessageContent` with gateway close code 4014 until you toggle it on under Bot → Privileged Gateway Intents.
+
+- **`GuildMessages` intent is required for @mentions in server channels**, separate from `DirectMessages`. We request both so the `raw` log can surface all message activity during debugging even though v1 only responds to DMs.
+
 ### cc-runner gotchas (these bit us, documented so you don't rediscover)
 
 - `claude -p` positional prompt: `--mcp-config <configs...>` is variadic and will greedily consume the prompt if you don't emit `--` before it. `cc-runner` already does this — don't strip it.
