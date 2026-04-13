@@ -1,11 +1,7 @@
 import { useState } from 'react';
 import { ProjectsTab } from './tabs/ProjectsTab.jsx';
-import {
-  ActivityTab,
-  ChannelsTab,
-  OrchestratorTab,
-  TriggersTab,
-} from './tabs/Stubs.jsx';
+import { TriggersTab } from './tabs/TriggersTab.jsx';
+import { ActivityTab, ChannelsTab, OrchestratorTab } from './tabs/Stubs.jsx';
 import { useLiveState } from './useLiveState.js';
 
 type TabId = 'projects' | 'channels' | 'triggers' | 'orchestrator' | 'activity';
@@ -49,7 +45,7 @@ export function App(): JSX.Element {
       <div style={{ padding: 24 }}>
         {tab === 'projects' && <ProjectsTab projects={data.projects} />}
         {tab === 'channels' && <ChannelsTab channels={data.channels} />}
-        {tab === 'triggers' && <TriggersTab triggers={data.triggers} />}
+        {tab === 'triggers' && <TriggersTab triggers={data.triggers} projects={data.projects} />}
         {tab === 'orchestrator' && <OrchestratorTab state={data.orchestrator} />}
         {tab === 'activity' && <ActivityTab />}
       </div>

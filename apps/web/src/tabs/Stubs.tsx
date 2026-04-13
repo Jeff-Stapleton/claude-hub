@@ -1,4 +1,4 @@
-import type { Channel, OrchestratorState, Trigger } from '../types.js';
+import type { Channel, OrchestratorState } from '../types.js';
 
 /**
  * Placeholder tabs for features not yet implemented.
@@ -16,18 +16,6 @@ export function ChannelsTab({ channels }: { channels: Channel[] }): JSX.Element 
         Discord adapter is not implemented yet. Registered channel configs will appear here.
       </p>
       <pre style={pre}>{JSON.stringify(channels, null, 2)}</pre>
-    </section>
-  );
-}
-
-export function TriggersTab({ triggers }: { triggers: Trigger[] }): JSX.Element {
-  return (
-    <section>
-      <h2>Triggers</h2>
-      <p style={{ opacity: 0.7 }}>
-        Cron + webhook runners are not implemented yet. Configured triggers will appear here.
-      </p>
-      <pre style={pre}>{JSON.stringify(triggers, null, 2)}</pre>
     </section>
   );
 }

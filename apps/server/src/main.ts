@@ -1,5 +1,6 @@
 import { CCConfigReader, CCWatcher } from '@claude-hub/cc-config-reader';
 import { Store } from '@claude-hub/core';
+import { CronScheduler, TriggerRunner } from '@claude-hub/triggers';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
 import { existsSync } from 'node:fs';
@@ -7,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerStateRoutes } from './routes/state.js';
+import { registerTriggerRoutes } from './routes/triggers.js';
 import { registerWs } from './ws.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -19,11 +21,21 @@ async function main(): Promise<void> {
   const ccWatcher = new CCWatcher(ccReader);
   ccWatcher.start();
 
+  const triggerRunner = new TriggerRunner(store);
+  const cronScheduler = new CronScheduler(store, triggerRunner);
+  cronScheduler.start();
+
   const app = Fastify({ logger: { level: 'info' } });
+
+  // Broadcast WS updates on trigger run lifecycle too, so the UI reflects
+  // a trigger firing without waiting for the next store save.
+  triggerRunner.on('started', () => ccWatcher.emit('change', { kind: 'projects' }));
+  triggerRunner.on('finished', () => ccWatcher.emit('change', { kind: 'projects' }));
 
   await registerWs(app, store, ccReader, ccWatcher);
   await registerStateRoutes(app, store, ccReader);
   await registerProjectRoutes(app, store);
+  await registerTriggerRoutes(app, store, triggerRunner);
 
   // Serve the built web bundle if present. In dev, the Vite server on :5173
   // proxies /api and /ws here; this static branch only matters for
@@ -46,6 +58,7 @@ async function main(): Promise<void> {
 
   const shutdown = async (): Promise<void> => {
     app.log.info('shutting down');
+    cronScheduler.stop();
     await ccWatcher.stop();
     await app.close();
     process.exit(0);

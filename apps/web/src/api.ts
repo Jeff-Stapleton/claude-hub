@@ -1,4 +1,15 @@
-import type { Project, UIState } from './types.js';
+import type { CronTrigger, Project, UIState } from './types.js';
+
+export interface TriggerRunRecord {
+  id: string;
+  triggerId: string;
+  startedAt: string;
+  finishedAt?: string;
+  status: 'running' | 'success' | 'error';
+  prompt: string;
+  transcript?: string;
+  error?: string;
+}
 
 /**
  * Thin fetch wrapper. Throws on non-2xx with the body text so react-query
@@ -22,4 +33,17 @@ export const api = {
     req<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
   deleteProject: (id: string) =>
     req<{ ok: true }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  createCronTrigger: (body: {
+    name: string;
+    projectId: string;
+    prompt: string;
+    cronExpr: string;
+  }) =>
+    req<CronTrigger>('/api/triggers/cron', { method: 'POST', body: JSON.stringify(body) }),
+  deleteTrigger: (id: string) =>
+    req<{ ok: true }>(`/api/triggers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  runTrigger: (id: string) =>
+    req<{ ok: true }>(`/api/triggers/${encodeURIComponent(id)}/run`, { method: 'POST' }),
+  listRuns: (id: string) =>
+    req<TriggerRunRecord[]>(`/api/triggers/${encodeURIComponent(id)}/runs`),
 };
