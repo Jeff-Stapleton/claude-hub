@@ -39,12 +39,42 @@ export class DiscordChannelAdapter implements ChannelAdapter {
     const client = new Client({
       intents: [
         GatewayIntentBits.DirectMessages,
+        GatewayIntentBits.GuildMessages,
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.Guilds,
       ],
       // Required for the bot to receive DMs it wasn't already a party to
       // when the gateway session started.
       partials: [Partials.Channel, Partials.Message],
+    });
+
+    // Raw gateway logging — fires for every dispatch event Discord sends,
+    // before discord.js's higher-level handlers. Lets us distinguish
+    // "gateway isn't delivering anything" from "discord.js isn't routing
+    // to MessageCreate".
+    client.on('raw', (packet: { t?: string; d?: unknown }) => {
+      if (!packet || !packet.t) return;
+      // Filter to events relevant to DM / message debugging so we don't
+      // spam PRESENCE_UPDATE / TYPING_START etc.
+      const interesting = new Set([
+        'READY',
+        'RESUMED',
+        'GUILD_CREATE',
+        'GUILD_DELETE',
+        'CHANNEL_CREATE',
+        'MESSAGE_CREATE',
+        'MESSAGE_UPDATE',
+        'MESSAGE_DELETE',
+      ]);
+      if (!interesting.has(packet.t)) return;
+      const d = packet.d as Record<string, unknown> | undefined;
+      const summary =
+        packet.t === 'MESSAGE_CREATE'
+          ? ` author=${(d?.author as { username?: string } | undefined)?.username ?? '?'} guild_id=${d?.guild_id ?? 'DM'} content=${JSON.stringify(String(d?.content ?? '').slice(0, 60))}`
+          : packet.t === 'GUILD_CREATE'
+            ? ` name=${(d as { name?: string } | undefined)?.name ?? '?'}`
+            : '';
+      console.log(`[discord] raw: ${packet.t}${summary}`);
     });
 
     client.on(Events.MessageCreate, (msg) => {
@@ -120,7 +150,10 @@ export class DiscordChannelAdapter implements ChannelAdapter {
     // login() resolves on auth, but the bot isn't ready to receive DMs
     // until the gateway READY event. Promote 'connected' status only then.
     client.once(Events.ClientReady, (c) => {
-      console.log(`[discord] ready — logged in as ${c.user.tag} (id=${c.user.id})`);
+      const guilds = c.guilds.cache.map((g) => g.name).join(', ') || '(none)';
+      console.log(
+        `[discord] ready — logged in as ${c.user.tag} (id=${c.user.id}) guilds=[${guilds}]`,
+      );
       this.state = 'connected';
       this.errorMsg = undefined;
       this.onStatusChange();
