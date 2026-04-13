@@ -30,16 +30,23 @@ export async function spawnProjectSession(opts: SpawnOptions): Promise<SpawnResu
     args.push('--session-id', randomUUID());
   }
   if (opts.extraArgs) args.push(...opts.extraArgs);
-  args.push(opts.prompt);
+  // `--` terminates option parsing so variadic flags like `--mcp-config
+  // <configs...>` don't greedily consume the positional prompt.
+  args.push('--', opts.prompt);
 
+  // On Windows, the bundled `claude` is a .cmd shim. Node's spawn() can
+  // invoke .cmd files directly as long as we don't use `shell: true` — and
+  // we specifically DON'T want shell:true, because node doesn't quote args
+  // in shell mode, so prompts with spaces get tokenized by cmd.exe and CC
+  // receives only the first word. Node's default spawn quoting handles
+  // this correctly when shell is false.
+  const useShell = opts.claudePath !== undefined && /\s/.test(opts.claudePath);
   return new Promise<SpawnResult>((resolve) => {
     const child = spawn(claudePath, args, {
       cwd: opts.cwd,
       env: process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
-      // On Windows, `claude` is typically a .cmd shim; shell-spawn is the
-      // simplest way to invoke it reliably across platforms.
-      shell: process.platform === 'win32',
+      shell: useShell,
     });
 
     let stdout = '';

@@ -39,6 +39,11 @@ export interface WebhookCreateResponse {
 
 export const api = {
   getState: () => req<UIState>('/api/state'),
+  saveDiscord: (body: { botToken?: string; allowedUserIds?: string[] }) =>
+    req<{ ok: true }>('/api/channels/discord', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
   addProject: (body: { path: string; alias?: string }) =>
     req<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
   deleteProject: (id: string) =>

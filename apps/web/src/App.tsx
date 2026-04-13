@@ -1,7 +1,8 @@
 import { useState } from 'react';
+import { ChannelsTab } from './tabs/ChannelsTab.jsx';
 import { ProjectsTab } from './tabs/ProjectsTab.jsx';
 import { TriggersTab } from './tabs/TriggersTab.jsx';
-import { ActivityTab, ChannelsTab, OrchestratorTab } from './tabs/Stubs.jsx';
+import { ActivityTab, OrchestratorTab } from './tabs/Stubs.jsx';
 import { useLiveState } from './useLiveState.js';
 
 type TabId = 'projects' | 'channels' | 'triggers' | 'orchestrator' | 'activity';

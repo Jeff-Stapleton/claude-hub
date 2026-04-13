@@ -1,11 +1,15 @@
 import { CCConfigReader, CCWatcher } from '@claude-hub/cc-config-reader';
+import { ChannelManager } from '@claude-hub/channels';
 import { Store } from '@claude-hub/core';
+import { Orchestrator, writeOrchestratorMcpConfig } from '@claude-hub/orchestrator';
 import { CronScheduler, TriggerRunner } from '@claude-hub/triggers';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
+import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { registerChannelRoutes } from './routes/channels.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerStateRoutes } from './routes/state.js';
 import { registerTriggerRoutes } from './routes/triggers.js';
@@ -25,17 +29,53 @@ async function main(): Promise<void> {
   const cronScheduler = new CronScheduler(store, triggerRunner);
   cronScheduler.start();
 
+  // Orchestrator: write the MCP config once, set up the workdir, wire a
+  // per-DM handler. Uses approach (B) — per-message claude -p --resume —
+  // so nothing here needs a long-lived CC subprocess.
+  const orchestratorWorkdir = store.paths.orchestratorWorkdir();
+  await mkdir(orchestratorWorkdir, { recursive: true });
+  const hubMcpServerPath = resolve(
+    __dirname,
+    '../../../packages/hub-mcp/dist/server.js',
+  );
+  const port = store.config().httpPort;
+  const mcpConfigPath = await writeOrchestratorMcpConfig({
+    dir: orchestratorWorkdir,
+    hubMcpServerPath,
+    hubUrl: `http://127.0.0.1:${port}`,
+  });
+  const orchestrator = new Orchestrator(store, {
+    workdir: orchestratorWorkdir,
+    mcpConfigPath,
+  });
+
+  const channels = new ChannelManager(store);
+
   const app = Fastify({ logger: { level: 'info' } });
 
-  // Broadcast WS updates on trigger run lifecycle too, so the UI reflects
-  // a trigger firing without waiting for the next store save.
+  // Broadcast WS updates on trigger + orchestrator activity so the UI
+  // reflects live state without polling.
   triggerRunner.on('started', () => ccWatcher.emit('change', { kind: 'projects' }));
   triggerRunner.on('finished', () => ccWatcher.emit('change', { kind: 'projects' }));
+
+  // Wire incoming channel messages through the orchestrator and reply
+  // back on the originating channel.
+  channels.start(async (msg) => {
+    app.log.info({ user: msg.user, channel: msg.channelId }, 'incoming DM');
+    const result = await orchestrator.handle(msg);
+    const reply = result.ok ? result.text : `⚠️ ${result.error}`;
+    try {
+      await channels.send(msg.channelId, msg.conversationId, reply);
+    } catch (err) {
+      app.log.error({ err }, 'failed to send orchestrator reply');
+    }
+  });
 
   await registerWs(app, store, ccReader, ccWatcher);
   await registerStateRoutes(app, store, ccReader);
   await registerProjectRoutes(app, store);
   await registerTriggerRoutes(app, store, triggerRunner);
+  await registerChannelRoutes(app, store);
 
   // Serve the built web bundle if present. In dev, the Vite server on :5173
   // proxies /api and /ws here; this static branch only matters for
@@ -44,7 +84,6 @@ async function main(): Promise<void> {
   if (existsSync(webDist)) {
     await app.register(fastifyStatic, { root: webDist, prefix: '/', decorateReply: false });
     app.setNotFoundHandler((req, reply) => {
-      // SPA fallback for client-side routing — leave /api and /ws alone.
       if (req.url.startsWith('/api') || req.url.startsWith('/ws')) {
         return reply.code(404).send({ error: 'not found' });
       }
@@ -52,13 +91,13 @@ async function main(): Promise<void> {
     });
   }
 
-  const port = store.config().httpPort;
   await app.listen({ host: '127.0.0.1', port });
   app.log.info(`claude-hub listening on http://127.0.0.1:${port}`);
 
   const shutdown = async (): Promise<void> => {
     app.log.info('shutting down');
     cronScheduler.stop();
+    await channels.stop();
     await ccWatcher.stop();
     await app.close();
     process.exit(0);

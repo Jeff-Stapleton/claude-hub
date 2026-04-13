@@ -56,6 +56,22 @@ export interface ChannelMessage {
   timestamp: ISODateString;
 }
 
+/**
+ * Runtime message shape handed to the orchestrator. Kept here (rather
+ * than in @claude-hub/channels) so the orchestrator package doesn't have
+ * to depend on channels just for this type.
+ */
+export interface IncomingChannelMessage {
+  /** Logical channel id, e.g. "discord". */
+  channelId: string;
+  /** Stable per-conversation id (e.g. Discord user id for DMs). */
+  conversationId: string;
+  /** Human-readable sender name for logs + UI. */
+  user: string;
+  text: string;
+  receivedAt: ISODateString;
+}
+
 // ---------------------------------------------------------------------------
 // Triggers (deterministic, non-conversational)
 // ---------------------------------------------------------------------------

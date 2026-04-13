@@ -1,4 +1,4 @@
-import type { Channel, OrchestratorState } from '../types.js';
+import type { OrchestratorState } from '../types.js';
 
 /**
  * Placeholder tabs for features not yet implemented.
@@ -7,18 +7,6 @@ import type { Channel, OrchestratorState } from '../types.js';
  * Triggers tab shows the empty list today and will grow into a full UI in
  * later steps without structural changes to App.tsx.
  */
-
-export function ChannelsTab({ channels }: { channels: Channel[] }): JSX.Element {
-  return (
-    <section>
-      <h2>Channels</h2>
-      <p style={{ opacity: 0.7 }}>
-        Discord adapter is not implemented yet. Registered channel configs will appear here.
-      </p>
-      <pre style={pre}>{JSON.stringify(channels, null, 2)}</pre>
-    </section>
-  );
-}
 
 export function OrchestratorTab({ state }: { state: OrchestratorState }): JSX.Element {
   return (
