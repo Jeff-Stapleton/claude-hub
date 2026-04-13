@@ -89,7 +89,11 @@ async function main(): Promise<void> {
   // `pnpm build && pnpm --filter @claude-hub/server start`.
   const webDist = resolve(__dirname, '../../web/dist');
   if (existsSync(webDist)) {
-    await app.register(fastifyStatic, { root: webDist, prefix: '/', decorateReply: false });
+    // decorateReply MUST be true for the SPA-fallback handler below to call
+    // reply.sendFile(). Browsers probe odd paths (/favicon.ico,
+    // /.well-known/appspecific/com.chrome.devtools.json) which fall through
+    // to setNotFoundHandler — without decoration we threw 500s on each.
+    await app.register(fastifyStatic, { root: webDist, prefix: '/' });
     app.setNotFoundHandler((req, reply) => {
       if (req.url.startsWith('/api') || req.url.startsWith('/ws')) {
         return reply.code(404).send({ error: 'not found' });
