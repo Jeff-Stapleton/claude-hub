@@ -48,20 +48,24 @@ export class DiscordChannelAdapter implements ChannelAdapter {
     });
 
     client.on(Events.MessageCreate, (msg) => {
+      // Top-level log fires for EVERY message the gateway delivers, before
+      // any filtering. If you DM the bot and don't see a line starting
+      // with "[discord] msg:" here, the gateway never delivered the
+      // message — it's a Discord-side issue (privacy settings, another
+      // process holding the bot's gateway session, etc.), not a hub bug.
+      console.log(
+        `[discord] msg: from=${msg.author.username} (id=${msg.author.id}) bot=${msg.author.bot} guild=${msg.guild?.name ?? 'DM'} content=${JSON.stringify(msg.content.slice(0, 80))}`,
+      );
+
       if (msg.author.bot) {
         return;
       }
       if (msg.guild) {
-        // DMs only — but log so the user can see the bot did receive their
-        // guild message and chose to ignore it (often a setup misconception).
-        console.log(
-          `[discord] ignoring guild message from ${msg.author.username} in ${msg.guild.name}`,
-        );
         return;
       }
       if (!this.config.allowedUserIds.includes(msg.author.id)) {
         console.log(
-          `[discord] dropping DM from ${msg.author.username} (id=${msg.author.id}) — not in allowlist`,
+          `[discord] dropping DM — id=${msg.author.id} not in allowlist (${this.config.allowedUserIds.length} entries)`,
         );
         return;
       }
@@ -69,9 +73,7 @@ export class DiscordChannelAdapter implements ChannelAdapter {
         console.log('[discord] no orchestrator handler attached; dropping DM');
         return;
       }
-      console.log(
-        `[discord] forwarding DM from ${msg.author.username}: ${msg.content.slice(0, 60)}`,
-      );
+      console.log(`[discord] forwarding DM to orchestrator`);
       this.handler({
         channelId: this.id,
         conversationId: msg.author.id,
@@ -85,6 +87,33 @@ export class DiscordChannelAdapter implements ChannelAdapter {
       console.error('[discord] client error:', err.message);
       this.state = 'error';
       this.errorMsg = err.message;
+      this.onStatusChange();
+    });
+
+    // Surface gateway lifecycle so we can diagnose "ready but not
+    // receiving" scenarios — most often caused by another process
+    // (e.g. OpenClaw) holding the same bot token's gateway session and
+    // forcing us into a resume loop or session replacement.
+    client.on(Events.ShardDisconnect, (event, shardId) => {
+      console.warn(
+        `[discord] shard ${shardId} disconnected (code=${event.code} reason=${event.reason || 'n/a'})`,
+      );
+      this.state = 'disconnected';
+      this.errorMsg = `gateway disconnected (code=${event.code})`;
+      this.onStatusChange();
+    });
+    client.on(Events.ShardReconnecting, (shardId) => {
+      console.warn(`[discord] shard ${shardId} reconnecting...`);
+    });
+    client.on(Events.ShardResume, (shardId, replayed) => {
+      console.log(`[discord] shard ${shardId} resumed (replayed ${replayed} events)`);
+    });
+    client.on(Events.Invalidated, () => {
+      console.error(
+        '[discord] session invalidated — another process may have claimed this bot token',
+      );
+      this.state = 'error';
+      this.errorMsg = 'session invalidated (another process claimed this token?)';
       this.onStatusChange();
     });
 
