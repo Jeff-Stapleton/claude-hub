@@ -43,9 +43,34 @@ export class DiscordChannelAdapter implements ChannelAdapter {
         GatewayIntentBits.MessageContent,
         GatewayIntentBits.Guilds,
       ],
-      // Required for the bot to receive DMs it wasn't already a party to
-      // when the gateway session started.
-      partials: [Partials.Channel, Partials.Message],
+      // For DMs, every one of these can be the object that's "partial" at
+      // dispatch time. Missing one causes discord.js to silently skip the
+      // typed emit when resolution fails — raw MESSAGE_CREATE fires but
+      // the MessageCreate event never does. User + GuildMember added
+      // defensively; not strictly required but harmless.
+      partials: [
+        Partials.Channel,
+        Partials.Message,
+        Partials.User,
+        Partials.GuildMember,
+        Partials.Reaction,
+      ],
+    });
+
+    // Surface discord.js's own warnings — they often name the exact
+    // partial or cache miss that's blocking event emit.
+    client.on(Events.Warn, (info) => console.warn('[discord warn]', info));
+    client.on(Events.Debug, (info) => {
+      // debug is very chatty; filter to probable failure hints.
+      if (
+        info.includes('error') ||
+        info.includes('failed') ||
+        info.includes('unable') ||
+        info.includes('dropped') ||
+        info.includes('missing')
+      ) {
+        console.log('[discord debug]', info);
+      }
     });
 
     // Raw gateway logging — fires for every dispatch event Discord sends,
