@@ -73,15 +73,22 @@ export class DiscordChannelAdapter implements ChannelAdapter {
       }
     });
 
-    // Raw gateway logging — fires for every dispatch event Discord sends,
-    // before discord.js's higher-level handlers. Lets us distinguish
-    // "gateway isn't delivering anything" from "discord.js isn't routing
-    // to MessageCreate".
+    // Raw gateway driver for DM messages.
+    //
+    // discord.js v14.16.3 has a bug where the typed MessageCreate event
+    // never fires for DMs despite the raw MESSAGE_CREATE dispatch
+    // arriving — observed directly (see commit history). The partial
+    // hydration step for the DM channel silently drops the emit. Rather
+    // than chase discord.js internals, we decode the raw packet
+    // ourselves for DMs. Guild messages still flow through the typed
+    // MessageCreate handler below (which currently drops them — v1 is
+    // DM-only).
     client.on('raw', (packet: { t?: string; d?: unknown }) => {
       if (!packet || !packet.t) return;
-      // Filter to events relevant to DM / message debugging so we don't
-      // spam PRESENCE_UPDATE / TYPING_START etc.
-      const interesting = new Set([
+
+      // Filter logging noise — keep only the events useful for
+      // diagnosing DM delivery.
+      const logged = new Set([
         'READY',
         'RESUMED',
         'GUILD_CREATE',
@@ -91,36 +98,32 @@ export class DiscordChannelAdapter implements ChannelAdapter {
         'MESSAGE_UPDATE',
         'MESSAGE_DELETE',
       ]);
-      if (!interesting.has(packet.t)) return;
-      const d = packet.d as Record<string, unknown> | undefined;
-      const summary =
-        packet.t === 'MESSAGE_CREATE'
-          ? ` author=${(d?.author as { username?: string } | undefined)?.username ?? '?'} guild_id=${d?.guild_id ?? 'DM'} content=${JSON.stringify(String(d?.content ?? '').slice(0, 60))}`
-          : packet.t === 'GUILD_CREATE'
-            ? ` name=${(d as { name?: string } | undefined)?.name ?? '?'}`
-            : '';
-      console.log(`[discord] raw: ${packet.t}${summary}`);
-    });
-
-    client.on(Events.MessageCreate, (msg) => {
-      // Top-level log fires for EVERY message the gateway delivers, before
-      // any filtering. If you DM the bot and don't see a line starting
-      // with "[discord] msg:" here, the gateway never delivered the
-      // message — it's a Discord-side issue (privacy settings, another
-      // process holding the bot's gateway session, etc.), not a hub bug.
-      console.log(
-        `[discord] msg: from=${msg.author.username} (id=${msg.author.id}) bot=${msg.author.bot} guild=${msg.guild?.name ?? 'DM'} content=${JSON.stringify(msg.content.slice(0, 80))}`,
-      );
-
-      if (msg.author.bot) {
-        return;
+      if (logged.has(packet.t)) {
+        const d = packet.d as Record<string, unknown> | undefined;
+        const summary =
+          packet.t === 'MESSAGE_CREATE'
+            ? ` author=${(d?.author as { username?: string } | undefined)?.username ?? '?'} guild_id=${d?.guild_id ?? 'DM'} content=${JSON.stringify(String(d?.content ?? '').slice(0, 60))}`
+            : packet.t === 'GUILD_CREATE'
+              ? ` name=${(d as { name?: string } | undefined)?.name ?? '?'}`
+              : '';
+        console.log(`[discord] raw: ${packet.t}${summary}`);
       }
-      if (msg.guild) {
-        return;
-      }
-      if (!this.config.allowedUserIds.includes(msg.author.id)) {
+
+      // DM delivery: handle MESSAGE_CREATE with no guild_id directly.
+      if (packet.t !== 'MESSAGE_CREATE') return;
+      const d = packet.d as
+        | {
+            author?: { id?: string; username?: string; bot?: boolean };
+            content?: string;
+            guild_id?: string;
+          }
+        | undefined;
+      if (!d || !d.author || !d.author.id || d.author.bot) return;
+      if (d.guild_id) return; // DMs only (guild messages flow through MessageCreate below)
+
+      if (!this.config.allowedUserIds.includes(d.author.id)) {
         console.log(
-          `[discord] dropping DM — id=${msg.author.id} not in allowlist (${this.config.allowedUserIds.length} entries)`,
+          `[discord] dropping DM — id=${d.author.id} not in allowlist (${this.config.allowedUserIds.length} entries)`,
         );
         return;
       }
@@ -128,14 +131,26 @@ export class DiscordChannelAdapter implements ChannelAdapter {
         console.log('[discord] no orchestrator handler attached; dropping DM');
         return;
       }
-      console.log(`[discord] forwarding DM to orchestrator`);
+
+      console.log(`[discord] forwarding DM to orchestrator (via raw path)`);
       this.handler({
         channelId: this.id,
-        conversationId: msg.author.id,
-        user: msg.author.username,
-        text: msg.content,
+        conversationId: d.author.id,
+        user: d.author.username ?? d.author.id,
+        text: d.content ?? '',
         receivedAt: new Date().toISOString(),
       });
+    });
+
+    // Typed MessageCreate handler covers guild messages only — DMs go
+    // through the raw handler above to work around discord.js v14's
+    // silent DM emit failure. If a future discord.js version starts
+    // firing MessageCreate for DMs, we defensively drop them here to
+    // avoid double-forwarding.
+    client.on(Events.MessageCreate, (msg) => {
+      if (msg.author.bot) return;
+      if (!msg.guild) return; // DMs handled by raw path
+      // v1 doesn't respond in guild channels at all.
     });
 
     client.on(Events.Error, (err) => {
