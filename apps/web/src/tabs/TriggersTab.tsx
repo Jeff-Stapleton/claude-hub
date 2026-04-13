@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { api } from '../api.js';
+import { api, type WebhookCreateResponse } from '../api.js';
 import type { CronTrigger, Project, Trigger, WebhookTrigger } from '../types.js';
 
 /**
@@ -26,21 +26,8 @@ export function TriggersTab({
       <CronList cron={cron} projects={projects} />
 
       <h3 style={{ marginTop: 32 }}>Webhooks</h3>
-      {webhooks.length === 0 ? (
-        <p style={{ opacity: 0.7 }}>
-          Webhook triggers land in a later step. They'll post to
-          <code> /triggers/webhooks/:id </code>
-          with a per-trigger secret.
-        </p>
-      ) : (
-        <ul>
-          {webhooks.map((w) => (
-            <li key={w.id}>
-              {w.name} — project {w.projectId}
-            </li>
-          ))}
-        </ul>
-      )}
+      <WebhookCreateForm projects={projects} />
+      <WebhookList webhooks={webhooks} projects={projects} />
     </section>
   );
 }
@@ -229,6 +216,187 @@ function CronRow({
         </tr>
       ) : null}
     </>
+  );
+}
+
+function WebhookCreateForm({ projects }: { projects: Project[] }): JSX.Element {
+  const qc = useQueryClient();
+  const [name, setName] = useState('');
+  const [projectId, setProjectId] = useState(projects[0]?.id ?? '');
+  const [promptTemplate, setPromptTemplate] = useState('');
+  /** The newly-created trigger — secret shown ONCE here, then dismissed. */
+  const [justCreated, setJustCreated] = useState<WebhookCreateResponse | null>(null);
+
+  const mutation = useMutation({
+    mutationFn: api.createWebhookTrigger,
+    onSuccess: (created) => {
+      setJustCreated(created);
+      setName('');
+      setPromptTemplate('');
+      void qc.invalidateQueries({ queryKey: ['state'] });
+    },
+  });
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (!name.trim() || !projectId || !promptTemplate.trim()) return;
+          mutation.mutate({
+            name: name.trim(),
+            projectId,
+            promptTemplate: promptTemplate.trim(),
+          });
+        }}
+        style={{ display: 'grid', gap: 8 }}
+      >
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            placeholder="Name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            style={{ flex: 1 }}
+          />
+          <select value={projectId} onChange={(e) => setProjectId(e.target.value)}>
+            <option value="" disabled>
+              (select project)
+            </option>
+            {projects.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.alias ?? p.path}
+              </option>
+            ))}
+          </select>
+        </div>
+        <textarea
+          placeholder="Prompt template — e.g. &quot;Investigate PR {{payload.number}} in repo {{payload.repo}}&quot;"
+          value={promptTemplate}
+          onChange={(e) => setPromptTemplate(e.target.value)}
+          rows={3}
+        />
+        <div>
+          <button
+            type="submit"
+            disabled={mutation.isPending || !name.trim() || !projectId || !promptTemplate.trim()}
+          >
+            Add webhook trigger
+          </button>
+          {mutation.error ? (
+            <span style={{ color: 'crimson', marginLeft: 8 }}>{String(mutation.error)}</span>
+          ) : null}
+        </div>
+      </form>
+
+      {justCreated ? (
+        <JustCreatedBanner trigger={justCreated} onDismiss={() => setJustCreated(null)} />
+      ) : null}
+    </div>
+  );
+}
+
+function JustCreatedBanner({
+  trigger,
+  onDismiss,
+}: {
+  trigger: WebhookCreateResponse;
+  onDismiss: () => void;
+}): JSX.Element {
+  return (
+    <div
+      style={{
+        marginTop: 12,
+        padding: 12,
+        border: '1px solid #3b6',
+        borderRadius: 4,
+        background: '#051',
+      }}
+    >
+      <div style={{ marginBottom: 6 }}>
+        <strong>Created "{trigger.name}".</strong> Copy the secret now — it won't be shown
+        again.
+      </div>
+      <div style={{ fontFamily: 'monospace', fontSize: 12 }}>
+        <div>
+          <span style={{ opacity: 0.7 }}>URL: </span>
+          <code>{trigger.url}</code>
+          <button onClick={() => void navigator.clipboard.writeText(trigger.url)}>copy</button>
+        </div>
+        <div>
+          <span style={{ opacity: 0.7 }}>Secret (header X-Hub-Secret): </span>
+          <code>{trigger.secret}</code>
+          <button onClick={() => void navigator.clipboard.writeText(trigger.secret)}>copy</button>
+        </div>
+        <div style={{ marginTop: 6, opacity: 0.7 }}>
+          <code>
+            curl -X POST {trigger.url} -H &quot;X-Hub-Secret: {trigger.secret}&quot; -H
+            &quot;Content-Type: application/json&quot; -d &apos;{'{}'}&apos;
+          </code>
+        </div>
+      </div>
+      <button style={{ marginTop: 8 }} onClick={onDismiss}>
+        Dismiss
+      </button>
+    </div>
+  );
+}
+
+function WebhookList({
+  webhooks,
+  projects,
+}: {
+  webhooks: WebhookTrigger[];
+  projects: Project[];
+}): JSX.Element {
+  const qc = useQueryClient();
+  const del = useMutation({
+    mutationFn: api.deleteTrigger,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
+
+  if (webhooks.length === 0) {
+    return <p style={{ opacity: 0.7 }}>No webhook triggers.</p>;
+  }
+  const nameFor = (id: string): string => projects.find((p) => p.id === id)?.alias ?? id;
+
+  return (
+    <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+      <thead>
+        <tr>
+          <th style={th}>Name</th>
+          <th style={th}>Project</th>
+          <th style={th}>URL</th>
+          <th style={th}>Last run</th>
+          <th style={th}>Status</th>
+          <th style={th}></th>
+        </tr>
+      </thead>
+      <tbody>
+        {webhooks.map((w) => {
+          const url = `${window.location.origin}/triggers/webhooks/${w.id}`;
+          return (
+            <tr key={w.id}>
+              <td style={td}>
+                <div>{w.name}</div>
+                <div style={{ opacity: 0.6, fontSize: 12 }}>
+                  {w.promptTemplate.slice(0, 80)}
+                </div>
+              </td>
+              <td style={td}>{nameFor(w.projectId)}</td>
+              <td style={td}>
+                <code style={{ fontSize: 11 }}>…/{w.id.slice(0, 8)}</code>{' '}
+                <button onClick={() => void navigator.clipboard.writeText(url)}>copy URL</button>
+              </td>
+              <td style={td}>{w.lastRun ? new Date(w.lastRun).toLocaleString() : '—'}</td>
+              <td style={td}>{w.lastStatus ?? '—'}</td>
+              <td style={td}>
+                <button onClick={() => del.mutate(w.id)}>Delete</button>
+              </td>
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
   );
 }
 

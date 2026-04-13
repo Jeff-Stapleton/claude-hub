@@ -27,6 +27,16 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+export interface WebhookCreateResponse {
+  id: string;
+  type: 'webhook';
+  name: string;
+  projectId: string;
+  promptTemplate: string;
+  secret: string;
+  url: string;
+}
+
 export const api = {
   getState: () => req<UIState>('/api/state'),
   addProject: (body: { path: string; alias?: string }) =>
@@ -40,6 +50,15 @@ export const api = {
     cronExpr: string;
   }) =>
     req<CronTrigger>('/api/triggers/cron', { method: 'POST', body: JSON.stringify(body) }),
+  createWebhookTrigger: (body: {
+    name: string;
+    projectId: string;
+    promptTemplate: string;
+  }) =>
+    req<WebhookCreateResponse>('/api/triggers/webhook', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
   deleteTrigger: (id: string) =>
     req<{ ok: true }>(`/api/triggers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   runTrigger: (id: string) =>
