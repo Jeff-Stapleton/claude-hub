@@ -162,6 +162,16 @@ export interface AppConfig {
   schemaVersion: number;
   /** HTTP server bind port. Defaults to 7878. */
   httpPort: number;
+  /**
+   * Hard timeout (ms) for a single orchestrator CC run — i.e. the time
+   * budget for each incoming DM's response. Defaults to 4 hours. DMs that
+   * legitimately take longer (deep work, long builds) can bump this by
+   * editing ~/.claude-hub/config.json; a server restart applies the change.
+   *
+   * Separate from trigger runs, which still use cc-runner's 10-minute
+   * default unless the trigger itself overrides it.
+   */
+  orchestratorTimeoutMs: number;
 }
 
 export interface StoreSnapshot {

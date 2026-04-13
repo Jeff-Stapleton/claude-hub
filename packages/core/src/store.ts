@@ -16,6 +16,7 @@ import {
 const DEFAULT_CONFIG: AppConfig = {
   schemaVersion: STORE_SCHEMA_VERSION,
   httpPort: 7878,
+  orchestratorTimeoutMs: 4 * 60 * 60 * 1000, // 4 hours
 };
 
 const DEFAULT_ORCHESTRATOR: OrchestratorState = {
@@ -69,7 +70,15 @@ export class Store extends EventEmitter {
 
     const fresh = emptySnapshot();
 
-    fresh.config = await readJsonOrDefault(this.paths.file('config'), fresh.config);
+    // Merge on top of defaults so additive fields (like a new timeout
+    // option) are populated for configs written by earlier versions. Only
+    // the schemaVersion gate is load-blocking; everything else is best-
+    // effort forward-compatible.
+    const persisted = await readJsonOrDefault<Partial<AppConfig>>(
+      this.paths.file('config'),
+      {},
+    );
+    fresh.config = { ...fresh.config, ...persisted };
     if (fresh.config.schemaVersion !== STORE_SCHEMA_VERSION) {
       throw new Error(
         `claude-hub store schema version mismatch: file=${fresh.config.schemaVersion}, ` +

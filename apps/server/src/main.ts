@@ -49,6 +49,7 @@ async function main(): Promise<void> {
   const orchestrator = new Orchestrator(store, {
     workdir: orchestratorWorkdir,
     mcpConfigPath,
+    timeoutMs: store.config().orchestratorTimeoutMs,
   });
 
   const channels = new ChannelManager(store);
@@ -64,11 +65,25 @@ async function main(): Promise<void> {
   channels.on('statusChanged', () => ccWatcher.emit('change', { kind: 'projects' }));
 
   // Wire incoming channel messages through the orchestrator and reply
-  // back on the originating channel.
+  // back on the originating channel. A quick ack goes out immediately so
+  // the user knows the hub received the message — CC runs can legitimately
+  // take minutes-to-hours. Ack failures are logged but don't block the
+  // orchestrator run; the real reply still lands when CC finishes.
   channels.start(async (msg) => {
     app.log.info({ user: msg.user, channel: msg.channelId }, 'incoming DM');
+
+    try {
+      await channels.send(
+        msg.channelId,
+        msg.conversationId,
+        'Got it — working on this now. I\'ll reply when I have a result.',
+      );
+    } catch (err) {
+      app.log.warn({ err }, 'failed to send ack');
+    }
+
     const result = await orchestrator.handle(msg);
-    const reply = result.ok ? result.text : `⚠️ ${result.error}`;
+    const reply = result.ok ? result.text : `Error: ${result.error}`;
     try {
       await channels.send(msg.channelId, msg.conversationId, reply);
     } catch (err) {
