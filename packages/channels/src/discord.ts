@@ -23,7 +23,11 @@ export class DiscordChannelAdapter implements ChannelAdapter {
   private state: 'connected' | 'disconnected' | 'error' = 'disconnected';
   private errorMsg: string | undefined = undefined;
 
-  constructor(private readonly config: DiscordChannelConfig) {}
+  constructor(
+    private readonly config: DiscordChannelConfig,
+    /** Called whenever the adapter's status or error changes. */
+    private readonly onStatusChange: () => void = () => {},
+  ) {}
 
   async connect(): Promise<void> {
     if (!this.config.botToken) {
@@ -44,10 +48,30 @@ export class DiscordChannelAdapter implements ChannelAdapter {
     });
 
     client.on(Events.MessageCreate, (msg) => {
-      if (msg.author.bot) return;
-      if (msg.guild) return; // DMs only
-      if (!this.config.allowedUserIds.includes(msg.author.id)) return;
-      if (!this.handler) return;
+      if (msg.author.bot) {
+        return;
+      }
+      if (msg.guild) {
+        // DMs only — but log so the user can see the bot did receive their
+        // guild message and chose to ignore it (often a setup misconception).
+        console.log(
+          `[discord] ignoring guild message from ${msg.author.username} in ${msg.guild.name}`,
+        );
+        return;
+      }
+      if (!this.config.allowedUserIds.includes(msg.author.id)) {
+        console.log(
+          `[discord] dropping DM from ${msg.author.username} (id=${msg.author.id}) — not in allowlist`,
+        );
+        return;
+      }
+      if (!this.handler) {
+        console.log('[discord] no orchestrator handler attached; dropping DM');
+        return;
+      }
+      console.log(
+        `[discord] forwarding DM from ${msg.author.username}: ${msg.content.slice(0, 60)}`,
+      );
       this.handler({
         channelId: this.id,
         conversationId: msg.author.id,
@@ -58,16 +82,30 @@ export class DiscordChannelAdapter implements ChannelAdapter {
     });
 
     client.on(Events.Error, (err) => {
+      console.error('[discord] client error:', err.message);
       this.state = 'error';
       this.errorMsg = err.message;
+      this.onStatusChange();
+    });
+
+    // login() resolves on auth, but the bot isn't ready to receive DMs
+    // until the gateway READY event. Promote 'connected' status only then.
+    client.once(Events.ClientReady, (c) => {
+      console.log(`[discord] ready — logged in as ${c.user.tag} (id=${c.user.id})`);
+      this.state = 'connected';
+      this.errorMsg = undefined;
+      this.onStatusChange();
     });
 
     try {
+      console.log('[discord] login...');
       await client.login(this.config.botToken);
+      // Provisionally mark connected; ClientReady will reaffirm.
       this.state = 'connected';
       this.errorMsg = undefined;
       this.client = client;
     } catch (err) {
+      console.error('[discord] login failed:', err);
       this.state = 'error';
       this.errorMsg = err instanceof Error ? err.message : String(err);
       throw err;

@@ -1,5 +1,6 @@
 import { CCConfigReader, type CCProjectEntry } from '@claude-hub/cc-config-reader';
 import { encodeProjectPath } from '@claude-hub/cc-config-reader';
+import type { ChannelManager } from '@claude-hub/channels';
 import type { Project, Store, StoreSnapshot } from '@claude-hub/core';
 
 /**
@@ -31,7 +32,11 @@ export type RedactedTrigger = StoreSnapshot['triggers'][number] extends infer T
     : T
   : never;
 
-export async function buildUIState(store: Store, ccReader: CCConfigReader): Promise<UIState> {
+export async function buildUIState(
+  store: Store,
+  ccReader: CCConfigReader,
+  channelMgr?: ChannelManager,
+): Promise<UIState> {
   const snapshot = store.get();
   const ccProjects = await ccReader.listProjects();
   const ccByName = new Map(ccProjects.map((p) => [p.sanitizedName, p]));
@@ -42,8 +47,19 @@ export async function buildUIState(store: Store, ccReader: CCConfigReader): Prom
     return cc ? { ...p, cc } : p;
   });
 
+  // Persisted status fields are dead — overwrite with the runtime status
+  // from the ChannelManager so the UI sees what's actually happening.
+  const live = channelMgr?.discordStatus();
   const channels = snapshot.channels.map<RedactedChannel>((c) => {
-    const { botToken, ...rest } = c;
+    const { botToken, status: _persistedStatus, lastError: _persistedErr, ...rest } = c;
+    if (c.type === 'discord' && live) {
+      return {
+        ...rest,
+        botTokenSet: !!botToken,
+        status: live.status,
+        ...(live.error ? { lastError: live.error } : {}),
+      };
+    }
     return { ...rest, botTokenSet: !!botToken };
   });
 

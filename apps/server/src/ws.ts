@@ -1,4 +1,5 @@
 import { CCConfigReader, CCWatcher } from '@claude-hub/cc-config-reader';
+import type { ChannelManager } from '@claude-hub/channels';
 import type { Store } from '@claude-hub/core';
 import websocket from '@fastify/websocket';
 import type { FastifyInstance } from 'fastify';
@@ -17,6 +18,7 @@ export async function registerWs(
   store: Store,
   ccReader: CCConfigReader,
   ccWatcher: CCWatcher,
+  channelMgr: ChannelManager,
 ): Promise<void> {
   await app.register(websocket);
 
@@ -25,7 +27,7 @@ export async function registerWs(
   app.get('/ws', { websocket: true }, (socket) => {
     clients.add(socket);
     void (async () => {
-      const state = await buildUIState(store, ccReader);
+      const state = await buildUIState(store, ccReader, channelMgr);
       safeSend(socket, { type: 'state', payload: state });
     })();
     socket.on('close', () => clients.delete(socket));
@@ -33,7 +35,7 @@ export async function registerWs(
 
   const broadcast = async (): Promise<void> => {
     if (clients.size === 0) return;
-    const state = await buildUIState(store, ccReader);
+    const state = await buildUIState(store, ccReader, channelMgr);
     const frame = JSON.stringify({ type: 'state', payload: state });
     for (const c of clients) {
       if (c.readyState === c.OPEN) c.send(frame);

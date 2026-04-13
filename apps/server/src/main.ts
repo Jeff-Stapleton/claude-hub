@@ -55,10 +55,13 @@ async function main(): Promise<void> {
 
   const app = Fastify({ logger: { level: 'info' } });
 
-  // Broadcast WS updates on trigger + orchestrator activity so the UI
-  // reflects live state without polling.
+  // Broadcast WS updates on trigger + channel + orchestrator activity so
+  // the UI reflects live state without polling. We piggy-back on
+  // ccWatcher's 'change' event because it's already wired to the
+  // broadcast in registerWs.
   triggerRunner.on('started', () => ccWatcher.emit('change', { kind: 'projects' }));
   triggerRunner.on('finished', () => ccWatcher.emit('change', { kind: 'projects' }));
+  channels.on('statusChanged', () => ccWatcher.emit('change', { kind: 'projects' }));
 
   // Wire incoming channel messages through the orchestrator and reply
   // back on the originating channel.
@@ -73,8 +76,8 @@ async function main(): Promise<void> {
     }
   });
 
-  await registerWs(app, store, ccReader, ccWatcher);
-  await registerStateRoutes(app, store, ccReader);
+  await registerWs(app, store, ccReader, ccWatcher, channels);
+  await registerStateRoutes(app, store, ccReader, channels);
   await registerProjectRoutes(app, store);
   await registerTriggerRoutes(app, store, triggerRunner);
   await registerChannelRoutes(app, store);
