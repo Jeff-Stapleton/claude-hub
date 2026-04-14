@@ -106,7 +106,9 @@ async function main(): Promise<void> {
     }
 
     const result = await orchestrator.handle(msg);
-    const reply = result.ok ? result.text : `Error: ${result.error}`;
+    const reply = result.ok
+      ? result.text.trim() || 'Done — no output returned.'
+      : `Error: ${result.error}`;
     try {
       await channels.send(msg.channelId, msg.conversationId, reply);
     } catch (err) {
