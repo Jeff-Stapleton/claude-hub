@@ -116,6 +116,13 @@ export class DiscordChannelAdapter implements ChannelAdapter {
             author?: { id?: string; username?: string; bot?: boolean };
             content?: string;
             guild_id?: string;
+            attachments?: Array<{
+              id?: string;
+              filename?: string;
+              url?: string;
+              size?: number;
+              content_type?: string;
+            }>;
           }
         | undefined;
       if (!d || !d.author || !d.author.id || d.author.bot) return;
@@ -132,13 +139,31 @@ export class DiscordChannelAdapter implements ChannelAdapter {
         return;
       }
 
-      console.log(`[discord] forwarding DM to orchestrator (via raw path)`);
-      this.handler({
-        channelId: this.id,
-        conversationId: d.author.id,
-        user: d.author.username ?? d.author.id,
-        text: d.content ?? '',
-        receivedAt: new Date().toISOString(),
+      // Download text-based attachments and inline them into the prompt.
+      // Binary files are noted but not fetched.
+      const attachments = d.attachments ?? [];
+      void (async () => {
+        let text = d.content ?? '';
+        if (attachments.length > 0) {
+          const parts = await Promise.all(attachments.map(fetchAttachment));
+          const inlined = parts.filter((p) => p.length > 0).join('\n\n');
+          if (inlined.length > 0) {
+            text = text.length > 0 ? `${text}\n\n${inlined}` : inlined;
+          }
+        }
+
+        console.log(
+          `[discord] forwarding DM to orchestrator (via raw path)${attachments.length > 0 ? ` with ${attachments.length} attachment(s)` : ''}`,
+        );
+        this.handler!({
+          channelId: this.id,
+          conversationId: d.author!.id!,
+          user: d.author!.username ?? d.author!.id!,
+          text,
+          receivedAt: new Date().toISOString(),
+        });
+      })().catch((err) => {
+        console.error('[discord] error processing DM attachments:', err);
       });
     });
 
@@ -241,6 +266,64 @@ export class DiscordChannelAdapter implements ChannelAdapter {
 
   lastError(): string | undefined {
     return this.errorMsg;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Attachment fetching
+// ---------------------------------------------------------------------------
+
+/** File extensions we'll download and inline as text. Everything else is noted but skipped. */
+const TEXT_EXTENSIONS = new Set([
+  '.md', '.txt', '.json', '.jsonl', '.csv', '.tsv', '.xml', '.yaml', '.yml',
+  '.toml', '.ini', '.cfg', '.conf', '.env', '.env.example',
+  '.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs',
+  '.py', '.rb', '.go', '.rs', '.java', '.kt', '.c', '.cpp', '.h', '.hpp',
+  '.cs', '.swift', '.sh', '.bash', '.zsh', '.fish', '.ps1', '.bat', '.cmd',
+  '.sql', '.graphql', '.gql',
+  '.html', '.htm', '.css', '.scss', '.less', '.svg',
+  '.dockerfile', '.tf', '.hcl',
+  '.log', '.diff', '.patch',
+]);
+
+/** Max bytes to fetch per attachment. Prevents a multi-GB file from OOMing the hub. */
+const MAX_ATTACHMENT_BYTES = 512 * 1024; // 512 KB
+
+function isTextFile(filename: string, contentType?: string): boolean {
+  if (contentType?.startsWith('text/')) return true;
+  const ext = filename.slice(filename.lastIndexOf('.')).toLowerCase();
+  return TEXT_EXTENSIONS.has(ext);
+}
+
+async function fetchAttachment(att: {
+  filename?: string;
+  url?: string;
+  size?: number;
+  content_type?: string;
+}): Promise<string> {
+  const name = att.filename ?? 'unknown';
+  if (!att.url) return `[Attachment: ${name} — no URL]`;
+
+  if (!isTextFile(name, att.content_type)) {
+    return `[Attachment: ${name} (${att.content_type ?? 'binary'}) — skipped, not a text file]`;
+  }
+
+  if (att.size !== undefined && att.size > MAX_ATTACHMENT_BYTES) {
+    return `[Attachment: ${name} — skipped, ${(att.size / 1024).toFixed(0)} KB exceeds ${MAX_ATTACHMENT_BYTES / 1024} KB limit]`;
+  }
+
+  try {
+    const res = await fetch(att.url);
+    if (!res.ok) return `[Attachment: ${name} — download failed: HTTP ${res.status}]`;
+    const body = await res.text();
+    // Double-check actual size after download (Discord CDN doesn't always
+    // include Content-Length, and size in the payload can be stale).
+    if (body.length > MAX_ATTACHMENT_BYTES) {
+      return `[Attachment: ${name} — truncated to ${MAX_ATTACHMENT_BYTES / 1024} KB]\n--- ${name} ---\n${body.slice(0, MAX_ATTACHMENT_BYTES)}\n--- end of ${name} (truncated) ---`;
+    }
+    return `--- ${name} ---\n${body}\n--- end of ${name} ---`;
+  } catch (err) {
+    return `[Attachment: ${name} — download error: ${err instanceof Error ? err.message : String(err)}]`;
   }
 }
 
