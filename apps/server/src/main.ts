@@ -19,6 +19,33 @@ import { registerWs } from './ws.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+const ACK_MESSAGES = [
+  'Got it — working on this now.',
+  'On it. I\'ll get back to you when I have something.',
+  'Message received. Spinning up now.',
+  'Roger that. Give me a bit to work through this.',
+  'Acknowledged — diving in.',
+  'Copy. Working on it.',
+  'Got your message. Kicking this off now.',
+  'Understood. I\'ll ping you when it\'s done.',
+  'On the case. Sit tight.',
+  'Received. Starting work on this now.',
+  'Message noted — processing.',
+  'Got it. Let me take a look.',
+  'Working on this. I\'ll follow up shortly.',
+  'Heard you. Firing up Claude Code now.',
+  'Acknowledged. Running this through now.',
+  'Received loud and clear. Working on it.',
+  'On it. I\'ll report back with results.',
+  'Understood — picking this up now.',
+  'Got it. Hang tight while I work through this.',
+  'Message received. I\'ll reply once I have an answer.',
+];
+
+function randomAck(): string {
+  return ACK_MESSAGES[Math.floor(Math.random() * ACK_MESSAGES.length)]!;
+}
+
 async function main(): Promise<void> {
   const store = new Store();
   await store.load();
@@ -73,11 +100,7 @@ async function main(): Promise<void> {
     app.log.info({ user: msg.user, channel: msg.channelId }, 'incoming DM');
 
     try {
-      await channels.send(
-        msg.channelId,
-        msg.conversationId,
-        'Got it — working on this now. I\'ll reply when I have a result.',
-      );
+      await channels.send(msg.channelId, msg.conversationId, randomAck());
     } catch (err) {
       app.log.warn({ err }, 'failed to send ack');
     }
