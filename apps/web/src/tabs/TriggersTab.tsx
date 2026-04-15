@@ -166,10 +166,13 @@ function CronRow({
   onRunNow: () => void;
 }): JSX.Element {
   const [showRuns, setShowRuns] = useState(false);
+  const isRunning = trigger.lastStatus === 'running';
   const runs = useQuery({
     queryKey: ['runs', trigger.id],
     queryFn: () => api.listRuns(trigger.id),
     enabled: showRuns,
+    // Poll while a run is in progress so the list updates when it finishes.
+    refetchInterval: isRunning ? 3_000 : showRuns ? 10_000 : false,
   });
 
   return (
@@ -184,9 +187,13 @@ function CronRow({
           <code>{trigger.cronExpr}</code>
         </td>
         <td style={td}>{trigger.lastRun ? new Date(trigger.lastRun).toLocaleString() : '—'}</td>
-        <td style={td}>{trigger.lastStatus ?? '—'}</td>
         <td style={td}>
-          <button onClick={onRunNow}>Run now</button>{' '}
+          <StatusBadge status={trigger.lastStatus} />
+        </td>
+        <td style={td}>
+          <button onClick={onRunNow} disabled={isRunning}>
+            {isRunning ? 'Running...' : 'Run now'}
+          </button>{' '}
           <button onClick={() => setShowRuns((v) => !v)}>
             {showRuns ? 'Hide runs' : 'Runs'}
           </button>{' '}
@@ -397,6 +404,34 @@ function WebhookList({
         })}
       </tbody>
     </table>
+  );
+}
+
+function StatusBadge({
+  status,
+}: {
+  status: 'running' | 'success' | 'error' | undefined;
+}): JSX.Element {
+  if (!status) return <span style={{ opacity: 0.5 }}>—</span>;
+  const colors: Record<string, string> = {
+    running: '#fa0',
+    success: '#3b6',
+    error: '#e44',
+  };
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        padding: '1px 8px',
+        borderRadius: 10,
+        background: colors[status] ?? '#888',
+        color: '#fff',
+        fontSize: 11,
+        fontWeight: 600,
+      }}
+    >
+      {status}
+    </span>
   );
 }
 

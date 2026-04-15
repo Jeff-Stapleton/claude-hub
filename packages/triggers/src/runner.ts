@@ -48,6 +48,9 @@ export class TriggerRunner extends EventEmitter {
       prompt,
       ...(input.payload !== undefined ? { payload: input.payload } : {}),
     };
+    // Mark the trigger as 'running' immediately so the UI reflects it
+    // via the next WS broadcast (before the CC run completes).
+    await this.markTriggerLast(trigger.id, running);
     this.emit('started', running);
 
     if (!project) {
