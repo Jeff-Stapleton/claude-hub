@@ -67,7 +67,10 @@ export const api = {
   deleteTrigger: (id: string) =>
     req<{ ok: true }>(`/api/triggers/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   runTrigger: (id: string) =>
-    req<{ ok: true }>(`/api/triggers/${encodeURIComponent(id)}/run`, { method: 'POST' }),
+    req<{ ok: true }>(`/api/triggers/${encodeURIComponent(id)}/run`, {
+      method: 'POST',
+      body: '{}',
+    }),
   listRuns: (id: string) =>
     req<TriggerRunRecord[]>(`/api/triggers/${encodeURIComponent(id)}/runs`),
   listActivity: () =>
@@ -75,5 +78,5 @@ export const api = {
       '/api/activity',
     ),
   clearOrchestratorSessions: () =>
-    req<{ ok: true }>('/api/orchestrator/clear-sessions', { method: 'POST' }),
+    req<{ ok: true }>('/api/orchestrator/clear-sessions', { method: 'POST', body: '{}' }),
 };
