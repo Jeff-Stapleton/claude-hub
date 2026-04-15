@@ -1,0 +1,36 @@
+# Normalize line endings. Every text file is checked in with LF regardless
+# of the contributor's platform, which kills the CRLF warnings Windows
+# clones would otherwise generate on every `git add`. Binary files are
+# marked explicitly so git doesn't try to diff or munge them.
+
+* text=auto eol=lf
+
+# Shell / batch files: preserve native line endings so they stay executable.
+*.sh       text eol=lf
+*.bash     text eol=lf
+*.zsh      text eol=lf
+*.fish     text eol=lf
+*.cmd      text eol=crlf
+*.bat      text eol=crlf
+*.ps1      text eol=crlf
+
+# Lockfiles: text, but treat as generated so github diffs collapse them.
+pnpm-lock.yaml  text eol=lf linguist-generated=true
+package-lock.json text eol=lf linguist-generated=true
+
+# Common binary types — prevent accidental text transforms.
+*.png      binary
+*.jpg      binary
+*.jpeg     binary
+*.gif      binary
+*.ico      binary
+*.webp     binary
+*.woff     binary
+*.woff2    binary
+*.ttf      binary
+*.eot      binary
+*.otf      binary
+*.pdf      binary
+*.zip      binary
+*.tar.gz   binary
+*.tgz      binary

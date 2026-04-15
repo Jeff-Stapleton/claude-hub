@@ -29,3 +29,10 @@ pnpm-debug.log*
 
 # vite
 .vite/
+
+# claude-hub runtime state (per-user, contains secrets)
+.claude-hub/
+
+# misc local artifacts
+.turbo/
+.tsbuildinfo
