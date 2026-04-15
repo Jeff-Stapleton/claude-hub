@@ -1,12 +1,14 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { HubPaths, Store, type Trigger } from '@claude-hub/core';
 import { registerProjectRoutes } from '../src/routes/projects.js';
 import { registerChannelRoutes } from '../src/routes/channels.js';
 import { registerOrchestratorRoutes } from '../src/routes/orchestrator.js';
+import { registerTriggerRoutes } from '../src/routes/triggers.js';
+import type { TriggerRunner } from '@claude-hub/triggers';
 
 describe('project routes', () => {
   let app: FastifyInstance;
@@ -176,5 +178,142 @@ describe('orchestrator routes', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(Object.keys(store.orchestrator().channelSessions)).toHaveLength(0);
+  });
+});
+
+describe('trigger routes', () => {
+  let app: FastifyInstance;
+  let store: Store;
+  let root: string;
+  let projectId: string;
+  const mockRunner = { run: vi.fn() } as unknown as TriggerRunner;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'trig-routes-'));
+    store = new Store(new HubPaths(root));
+    await store.load();
+    // Seed a project so trigger creation succeeds.
+    await store.update('projects', [
+      { id: 'proj-1', path: '/tmp/proj', addedAt: new Date().toISOString() },
+    ]);
+    projectId = 'proj-1';
+    app = Fastify();
+    await registerTriggerRoutes(app, store, mockRunner);
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('POST /api/triggers/cron creates a trigger', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: {
+        name: 'daily',
+        projectId,
+        prompt: 'summarize',
+        cronExpr: '0 9 * * *',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.type).toBe('cron');
+    expect(body.name).toBe('daily');
+    expect(store.triggers()).toHaveLength(1);
+  });
+
+  it('POST /api/triggers/cron rejects missing fields', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: { name: 'incomplete' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/required/);
+  });
+
+  it('POST /api/triggers/cron rejects invalid cron expression', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: {
+        name: 'bad',
+        projectId,
+        prompt: 'x',
+        cronExpr: 'not a cron',
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/invalid cron/);
+  });
+
+  it('POST /api/triggers/cron rejects unknown project', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: {
+        name: 'orphan',
+        projectId: 'does-not-exist',
+        prompt: 'x',
+        cronExpr: '* * * * *',
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/unknown projectId/);
+  });
+
+  it('POST /api/triggers/:id/run returns 202 with JSON body', async () => {
+    // Create a trigger first
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: {
+        name: 'test',
+        projectId,
+        prompt: 'hello',
+        cronExpr: '0 0 1 1 *',
+      },
+    });
+    const triggerId = JSON.parse(create.body).id;
+
+    // Run-now: the body MUST be '{}', not empty — otherwise Fastify throws
+    // FST_ERR_CTP_EMPTY_JSON_BODY because the content-type is
+    // application/json.
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/triggers/${triggerId}/run`,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(202);
+    expect(JSON.parse(res.body).ok).toBe(true);
+  });
+
+  it('POST /api/triggers/:id/run returns 404 for unknown trigger', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/nonexistent/run',
+      payload: {},
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('DELETE /api/triggers/:id removes a trigger', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: {
+        name: 'doomed',
+        projectId,
+        prompt: 'x',
+        cronExpr: '0 0 1 1 *',
+      },
+    });
+    const id = JSON.parse(create.body).id;
+    const res = await app.inject({ method: 'DELETE', url: `/api/triggers/${id}` });
+    expect(res.statusCode).toBe(200);
+    expect(store.triggers()).toHaveLength(0);
   });
 });
