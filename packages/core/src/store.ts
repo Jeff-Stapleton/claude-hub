@@ -17,6 +17,7 @@ const DEFAULT_CONFIG: AppConfig = {
   schemaVersion: STORE_SCHEMA_VERSION,
   httpPort: 7878,
   orchestratorTimeoutMs: 4 * 60 * 60 * 1000, // 4 hours
+  triggerTimeoutMs: 4 * 60 * 60 * 1000, // 4 hours
 };
 
 const DEFAULT_ORCHESTRATOR: OrchestratorState = {

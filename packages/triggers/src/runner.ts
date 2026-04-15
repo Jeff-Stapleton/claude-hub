@@ -25,7 +25,10 @@ export interface TriggerRunnerEvents {
  * in cron.ts and webhook.ts. This class is the shared core.
  */
 export class TriggerRunner extends EventEmitter {
-  constructor(private readonly store: Store) {
+  constructor(
+    private readonly store: Store,
+    private readonly opts: { timeoutMs?: number } = {},
+  ) {
     super();
   }
 
@@ -39,6 +42,10 @@ export class TriggerRunner extends EventEmitter {
       trigger.type === 'webhook'
         ? render(trigger.promptTemplate, { payload: input.payload })
         : trigger.prompt;
+
+    console.log(
+      `[trigger] starting run ${runId.slice(0, 8)} for "${trigger.name}" (${trigger.type}) project=${trigger.projectId}`,
+    );
 
     const running: TriggerRun = {
       id: runId,
@@ -54,6 +61,7 @@ export class TriggerRunner extends EventEmitter {
     this.emit('started', running);
 
     if (!project) {
+      console.error(`[trigger] run ${runId.slice(0, 8)} error: project not found`);
       const final: TriggerRun = {
         ...running,
         finishedAt: new Date().toISOString(),
@@ -68,13 +76,19 @@ export class TriggerRunner extends EventEmitter {
 
     let result: SpawnResult;
     try {
-      result = await spawnProjectSession({ cwd: project.path, prompt });
+      result = await spawnProjectSession({
+        cwd: project.path,
+        prompt,
+        ...(this.opts.timeoutMs ? { timeoutMs: this.opts.timeoutMs } : {}),
+      });
     } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[trigger] run ${runId.slice(0, 8)} threw: ${errMsg}`);
       const final: TriggerRun = {
         ...running,
         finishedAt: new Date().toISOString(),
         status: 'error',
-        error: err instanceof Error ? err.message : String(err),
+        error: errMsg,
       };
       await appendTriggerRun(this.store.paths, final);
       await this.markTriggerLast(trigger.id, final);
@@ -95,6 +109,13 @@ export class TriggerRunner extends EventEmitter {
           status: 'error',
           error: result.error,
         };
+
+    const elapsed = final.finishedAt
+      ? ((new Date(final.finishedAt).getTime() - new Date(startedAt).getTime()) / 1000).toFixed(1)
+      : '?';
+    console.log(
+      `[trigger] run ${runId.slice(0, 8)} ${final.status} in ${elapsed}s${final.error ? ` — ${final.error.slice(0, 100)}` : ''}`,
+    );
 
     await appendTriggerRun(this.store.paths, final);
     await this.markTriggerLast(trigger.id, final);

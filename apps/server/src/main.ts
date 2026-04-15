@@ -54,7 +54,9 @@ async function main(): Promise<void> {
   const ccWatcher = new CCWatcher(ccReader);
   ccWatcher.start();
 
-  const triggerRunner = new TriggerRunner(store);
+  const triggerRunner = new TriggerRunner(store, {
+    timeoutMs: store.config().triggerTimeoutMs,
+  });
   const cronScheduler = new CronScheduler(store, triggerRunner);
   cronScheduler.start();
 
