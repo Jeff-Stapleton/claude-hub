@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Scene } from './scenes/Scene.jsx';
-import { useSceneRouter, type SceneId } from './scenes/useSceneRouter.js';
+import { useSceneRouter } from './scenes/useSceneRouter.js';
+import { Workshop } from './scenes/Workshop.jsx';
 import { ActivityTab } from './tabs/ActivityTab.jsx';
 import { ChannelsTab } from './tabs/ChannelsTab.jsx';
 import { OrchestratorTab } from './tabs/OrchestratorTab.jsx';
@@ -44,7 +45,7 @@ export function App(): JSX.Element {
 
   return (
     <Scene sceneKey={scene}>
-      {scene === 'workshop' && <WorkshopPlaceholder navigate={navigate} />}
+      {scene === 'workshop' && <Workshop state={data} navigate={navigate} />}
       {scene === 'projects' && (
         <SubScreen title="Projects" onBack={() => navigate('workshop')}>
           <ProjectsTab projects={data.projects} />
@@ -71,40 +72,6 @@ export function App(): JSX.Element {
         </SubScreen>
       )}
     </Scene>
-  );
-}
-
-function WorkshopPlaceholder({
-  navigate,
-}: {
-  navigate: (s: SceneId) => void;
-}): JSX.Element {
-  // Five rectangular hotspots in approximate isometric positions, ready
-  // for Phase 2 to replace with real workstations. The layout grid is
-  // intentionally rough — Phase 2 places each at its illustrated anchor.
-  const stations: Array<{ id: SceneId; label: string; pos: React.CSSProperties }> = [
-    { id: 'projects', label: 'Projects bench', pos: { top: '40%', left: '10%' } },
-    { id: 'triggers', label: 'Triggers (clocks + mail)', pos: { top: '15%', left: '38%' } },
-    { id: 'orchestrator', label: 'Orchestrator console', pos: { top: '45%', left: '40%' } },
-    { id: 'channels', label: 'Channels radio', pos: { top: '20%', left: '68%' } },
-    { id: 'activity', label: 'Time card wall', pos: { top: '55%', left: '70%' } },
-  ];
-
-  return (
-    <div style={workshopRoot}>
-      <div style={workshopTitle}>claude-hub workshop</div>
-      <div style={workshopHint}>(placeholder — click a station)</div>
-      {stations.map((s) => (
-        <button
-          key={s.id}
-          onClick={() => navigate(s.id)}
-          style={{ ...station, ...s.pos }}
-          aria-label={s.label}
-        >
-          {s.label}
-        </button>
-      ))}
-    </div>
   );
 }
 
@@ -143,50 +110,6 @@ const centered: React.CSSProperties = {
   placeItems: 'center',
   fontSize: 14,
   opacity: 0.7,
-};
-
-const workshopRoot: React.CSSProperties = {
-  position: 'absolute',
-  inset: 0,
-  // Placeholder backdrop. Phase 2 swaps in the isometric room.
-  background:
-    'linear-gradient(180deg, #2a1d14 0%, #1f1610 50%, #15100c 100%)',
-};
-
-const workshopTitle: React.CSSProperties = {
-  position: 'absolute',
-  top: '4%',
-  left: '50%',
-  transform: 'translateX(-50%)',
-  fontSize: 22,
-  fontWeight: 600,
-  letterSpacing: 1,
-  color: '#e8d6b0',
-  opacity: 0.85,
-};
-
-const workshopHint: React.CSSProperties = {
-  position: 'absolute',
-  top: '11%',
-  left: '50%',
-  transform: 'translateX(-50%)',
-  fontSize: 12,
-  color: '#c8a888',
-  opacity: 0.55,
-};
-
-const station: React.CSSProperties = {
-  position: 'absolute',
-  width: '22%',
-  height: '20%',
-  padding: 0,
-  background: 'rgba(80, 56, 36, 0.4)',
-  color: '#f3e0bd',
-  border: '1.5px dashed #6b4d2e',
-  borderRadius: 8,
-  cursor: 'pointer',
-  fontSize: 13,
-  fontWeight: 500,
 };
 
 const subScreenRoot: React.CSSProperties = {
