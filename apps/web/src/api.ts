@@ -16,9 +16,16 @@ export interface TriggerRunRecord {
  * can surface the error.
  */
 async function req<T>(path: string, init?: RequestInit): Promise<T> {
+  // Only declare a JSON content-type when there's actually a body — Fastify's
+  // JSON parser rejects empty bodies with FST_ERR_CTP_EMPTY_JSON_BODY when the
+  // content-type header is set but the body is empty (bites DELETEs).
+  const hasBody = init?.body !== undefined && init.body !== null;
   const res = await fetch(path, {
     ...init,
-    headers: { 'content-type': 'application/json', ...(init?.headers ?? {}) },
+    headers: {
+      ...(hasBody ? { 'content-type': 'application/json' } : {}),
+      ...(init?.headers ?? {}),
+    },
   });
   if (!res.ok) {
     const body = await res.text().catch(() => '');
