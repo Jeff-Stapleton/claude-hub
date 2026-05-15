@@ -316,4 +316,90 @@ describe('trigger routes', () => {
     expect(res.statusCode).toBe(200);
     expect(store.triggers()).toHaveLength(0);
   });
+
+  it('POST /api/triggers/webhook creates a webhook and returns the one-time secret', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/webhook',
+      payload: { name: 'gh', projectId, promptTemplate: 'PR {{payload.number}}' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.type).toBe('webhook');
+    // Secret is plaintext exactly once on create — must be 64-char hex.
+    expect(body.secret).toMatch(/^[a-f0-9]{64}$/);
+    expect(body.url).toMatch(new RegExp(`/triggers/webhooks/${body.id}$`));
+  });
+
+  it('POST /triggers/webhooks/:id rejects requests without a secret header (401)', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/webhook',
+      payload: { name: 'wh', projectId, promptTemplate: 'x' },
+    });
+    const { id } = JSON.parse(create.body);
+    vi.mocked(mockRunner.run).mockReset();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/triggers/webhooks/${id}`,
+      payload: {},
+    });
+    expect(res.statusCode).toBe(401);
+    expect(mockRunner.run).not.toHaveBeenCalled();
+  });
+
+  it('POST /triggers/webhooks/:id rejects a wrong secret (401)', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/webhook',
+      payload: { name: 'wh', projectId, promptTemplate: 'x' },
+    });
+    const { id } = JSON.parse(create.body);
+    vi.mocked(mockRunner.run).mockReset();
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/triggers/webhooks/${id}`,
+      headers: { 'x-hub-secret': 'not-the-real-secret' },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(401);
+    expect(mockRunner.run).not.toHaveBeenCalled();
+  });
+
+  it('POST /triggers/webhooks/:id accepts the correct secret and forwards the payload (202)', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/webhook',
+      payload: { name: 'wh', projectId, promptTemplate: 'x' },
+    });
+    const { id, secret } = JSON.parse(create.body);
+    vi.mocked(mockRunner.run).mockReset();
+
+    const payload = { number: 42 };
+    const res = await app.inject({
+      method: 'POST',
+      url: `/triggers/webhooks/${id}`,
+      headers: { 'x-hub-secret': secret },
+      payload,
+    });
+    expect(res.statusCode).toBe(202);
+    expect(mockRunner.run).toHaveBeenCalledOnce();
+    const [trigger, input] = vi.mocked(mockRunner.run).mock.calls[0]!;
+    expect(trigger.id).toBe(id);
+    expect(input?.payload).toEqual(payload);
+  });
+
+  it('POST /triggers/webhooks/:id returns 404 for an unknown id (does not leak existence)', async () => {
+    // 404 (not 401) is intentional: we don't want to confirm trigger
+    // existence to unauthenticated probers.
+    const res = await app.inject({
+      method: 'POST',
+      url: '/triggers/webhooks/does-not-exist',
+      headers: { 'x-hub-secret': 'whatever' },
+      payload: {},
+    });
+    expect(res.statusCode).toBe(404);
+  });
 });
