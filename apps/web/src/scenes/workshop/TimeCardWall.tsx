@@ -1,14 +1,14 @@
 import type { Trigger } from '../../types.js';
+import { FLOOR, iso, poly } from '../iso.js';
 import { Workstation } from './Workstation.jsx';
 
-const SLOTS = 12; // 4 columns × 3 rows of card slots
+const SLOTS = 12;
 
 /**
- * Mid-left floor: a wall of time card slots with a punch clock on top.
- *
- * For Phase 2 the "cards" reflect triggers that have a lastRun — once we
- * have a richer activity feed in scope (Phase 3+) this can read the
- * actual run history. Color band on each card encodes lastStatus.
+ * Mounted on the back-right wall (x = FLOOR). A punch clock at top and
+ * a 4×3 grid of time card slots. For Phase 2 we approximate "recent
+ * activity" by showing one card per trigger that has a `lastRun`; status
+ * colors the card's edge band.
  */
 export function TimeCardWall({
   triggers,
@@ -17,62 +17,103 @@ export function TimeCardWall({
   triggers: Trigger[];
   onOpen: () => void;
 }): JSX.Element {
-  // Sort by lastRun desc so newest pinned cards are top-left.
   const recent = triggers
     .filter((t) => !!t.lastRun)
     .sort((a, b) => (b.lastRun ?? '').localeCompare(a.lastRun ?? ''))
     .slice(0, SLOTS);
 
-  const wallX = 120;
-  const wallY = 460;
-  const wallW = 350;
-  const wallH = 220;
+  // Plaque on back-right wall: y ∈ [1, 9], z ∈ [0.4, 2.6]
+  const ys = 1;
+  const ye = 9;
+  const zs = 0.4;
+  const ze = 2.6;
+  const wallX = FLOOR;
 
-  // Punch clock dimensions.
-  const punchX = wallX + wallW / 2;
-  const punchY = wallY + 30;
+  const bl = iso(wallX, ys, zs);
+  const br = iso(wallX, ye, zs);
+  const tr = iso(wallX, ye, ze);
+  const tl = iso(wallX, ys, ze);
 
   return (
     <Workstation
-      x={100}
-      y={440}
-      width={400}
-      height={240}
       label={`Activity (${recent.length} recent runs)`}
       onActivate={onOpen}
     >
-      {/* Wall plaque */}
-      <rect x={wallX} y={wallY} width={wallW} height={wallH} fill="#2a1d14" stroke="#1a110a" strokeWidth={2} />
+      {/* Plaque */}
+      <polygon points={poly(bl, br, tr, tl)} fill="#2a1d14" stroke="#1a110a" strokeWidth={2} />
 
-      {/* Punch clock body */}
-      <rect x={punchX - 50} y={punchY - 20} width={100} height={50} rx={6} fill="#3a2818" stroke="#1a110a" strokeWidth={2} />
-      <rect x={punchX - 36} y={punchY - 10} width={72} height={28} fill="#1a2018" stroke="#0a0e0a" strokeWidth={1} />
-      <text x={punchX} y={punchY + 9} textAnchor="middle" fontSize={11} fontFamily="monospace" fill="#a8e0c8">
-        TIME
-      </text>
+      {/* Punch clock at the top center of the plaque */}
+      {(() => {
+        const a = iso(wallX, (ys + ye) / 2 - 0.7, ze - 0.6);
+        const b = iso(wallX, (ys + ye) / 2 + 0.7, ze - 0.6);
+        const c = iso(wallX, (ys + ye) / 2 + 0.7, ze - 0.1);
+        const d = iso(wallX, (ys + ye) / 2 - 0.7, ze - 0.1);
+        const screen = {
+          a: iso(wallX, (ys + ye) / 2 - 0.5, ze - 0.5),
+          b: iso(wallX, (ys + ye) / 2 + 0.5, ze - 0.5),
+          c: iso(wallX, (ys + ye) / 2 + 0.5, ze - 0.2),
+          d: iso(wallX, (ys + ye) / 2 - 0.5, ze - 0.2),
+        };
+        return (
+          <>
+            <polygon points={poly(a, b, c, d)} fill="#3a2818" stroke="#1a110a" strokeWidth={1.5} />
+            <polygon
+              points={poly(screen.a, screen.b, screen.c, screen.d)}
+              fill="#1a2018"
+              stroke="#0a0e0a"
+              strokeWidth={1}
+            />
+            <text
+              x={(screen.a.x + screen.b.x) / 2}
+              y={(screen.a.y + screen.d.y) / 2 + 3}
+              textAnchor="middle"
+              fontSize={10}
+              fontFamily="monospace"
+              fill="#a8e0c8"
+            >
+              TIME
+            </text>
+          </>
+        );
+      })()}
 
-      {/* Slot grid */}
+      {/* Slot grid: 4 columns across (Y direction) × 3 rows (down in Z) */}
       {Array.from({ length: SLOTS }, (_, i) => {
         const col = i % 4;
         const row = Math.floor(i / 4);
-        const x = wallX + 20 + col * 80;
-        const y = wallY + 80 + row * 50;
+        const cyw = ys + 0.7 + col * 1.85;
+        const czw = ze - 0.85 - row * 0.55;
         const card = recent[i];
-        return <Slot key={i} x={x} y={y} card={card} />;
+        return <Slot key={i} y={cyw} z={czw} wallX={wallX} card={card} />;
       })}
     </Workstation>
   );
 }
 
 function Slot({
-  x,
   y,
+  z,
+  wallX,
   card,
 }: {
-  x: number;
   y: number;
+  z: number;
+  wallX: number;
   card: Trigger | undefined;
 }): JSX.Element {
+  // Slot itself: a small horizontal mount on the wall.
+  const slotW = 1.4;
+  const ms = iso(wallX, y - slotW / 2, z);
+  const me = iso(wallX, y + slotW / 2, z);
+  // Card sticking up from the slot.
+  const cardH = 0.4;
+  const ca = iso(wallX, y - slotW / 2 + 0.1, z);
+  const cb = iso(wallX, y + slotW / 2 - 0.1, z);
+  const cc = iso(wallX, y + slotW / 2 - 0.1, z + cardH);
+  const cd = iso(wallX, y - slotW / 2 + 0.1, z + cardH);
+  const top = iso(wallX, y + slotW / 2 - 0.1, z + cardH - 0.05);
+  const topL = iso(wallX, y - slotW / 2 + 0.1, z + cardH - 0.05);
+
   const band =
     card?.lastStatus === 'error'
       ? '#cf4040'
@@ -84,17 +125,18 @@ function Slot({
 
   return (
     <g>
-      {/* Slot mount (always visible) */}
-      <rect x={x} y={y + 18} width={70} height={6} fill="#1a110a" />
-      {/* Card sticking up out of the slot (only when there's recent run data) */}
+      {/* Slot mount (always rendered) */}
+      <line x1={ms.x} y1={ms.y} x2={me.x} y2={me.y} stroke="#1a110a" strokeWidth={4} />
       {card ? (
         <>
-          <rect x={x + 6} y={y} width={58} height={22} fill="#e8d6b0" stroke="#2a1c10" strokeWidth={1} />
-          {/* Status color band on the card edge */}
-          <rect x={x + 6} y={y} width={58} height={3} fill={band} />
-          {/* Tiny stamp lines */}
-          <line x1={x + 12} y1={y + 10} x2={x + 58} y2={y + 10} stroke="#5a4828" strokeWidth={0.8} opacity={0.7} />
-          <line x1={x + 12} y1={y + 15} x2={x + 48} y2={y + 15} stroke="#5a4828" strokeWidth={0.8} opacity={0.7} />
+          <polygon
+            points={poly(ca, cb, cc, cd)}
+            fill="#e8d6b0"
+            stroke="#2a1c10"
+            strokeWidth={0.8}
+          />
+          {/* Status color band along the top edge of the card */}
+          <polygon points={poly(topL, top, cc, cd)} fill={band} />
         </>
       ) : null}
     </g>

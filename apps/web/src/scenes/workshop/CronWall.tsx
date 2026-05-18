@@ -1,15 +1,17 @@
 import type { Trigger } from '../../types.js';
+import { FLOOR, iso, poly } from '../iso.js';
 import { Workstation } from './Workstation.jsx';
 
 const MAX_VISIBLE_CLOCKS = 8;
 
 /**
- * Back-left wall: a grid of wall clocks. One per cron trigger.
+ * Mounted on the back-left wall (y = FLOOR). A grid of round clocks on
+ * a wooden plaque. The plaque is a parallelogram in the wall plane (y is
+ * constant); the clocks themselves are circles rendered without
+ * perspective skew — they read as "facing the viewer" which keeps them
+ * legible at the workshop's small scale.
  *
- * Any cron with lastStatus='running' pulses its clock. Other states are
- * shown via face color (success = warm cream, error = red wash, unrun =
- * dim gray). The clock hands themselves are decorative — the running
- * pulse is the load-bearing visual cue.
+ * Running cron triggers pulse their clock; success/error tint the face.
  */
 export function CronWall({
   triggers,
@@ -22,84 +24,80 @@ export function CronWall({
   const visible = crons.slice(0, MAX_VISIBLE_CLOCKS);
   const overflow = Math.max(0, crons.length - MAX_VISIBLE_CLOCKS);
 
-  // Wall plane.
-  const wallX = 120;
-  const wallY = 120;
-  const wallW = 680;
-  const wallH = 300;
+  // Plaque on back-left wall: x ∈ [1, 9], z ∈ [0.6, 2.6]
+  const xs = 1;
+  const xe = 9;
+  const zs = 0.6;
+  const ze = 2.6;
+  const wallY = FLOOR;
+
+  const bl = iso(xs, wallY, zs);
+  const br = iso(xe, wallY, zs);
+  const tr = iso(xe, wallY, ze);
+  const tl = iso(xs, wallY, ze);
 
   return (
-    <Workstation
-      x={100}
-      y={100}
-      width={700}
-      height={320}
-      label={`Cron triggers (${crons.length})`}
-      onActivate={onOpen}
-    >
-      {/* Wall backboard */}
-      <rect
-        x={wallX}
-        y={wallY}
-        width={wallW}
-        height={wallH}
-        fill="#2a1d14"
-        stroke="#1a110a"
-        strokeWidth={2}
+    <Workstation label={`Cron triggers (${crons.length})`} onActivate={onOpen}>
+      {/* Plaque */}
+      <polygon points={poly(bl, br, tr, tl)} fill="#2a1d14" stroke="#1a110a" strokeWidth={2} />
+      {/* Plaque trim */}
+      <polygon
+        points={poly(
+          iso(xs + 0.1, wallY, zs + 0.1),
+          iso(xe - 0.1, wallY, zs + 0.1),
+          iso(xe - 0.1, wallY, ze - 0.1),
+          iso(xs + 0.1, wallY, ze - 0.1),
+        )}
+        fill="none"
+        stroke="#5a3a22"
+        strokeWidth={1.2}
       />
-      {/* Subtle horizontal wood plank lines */}
-      {[80, 160, 240].map((dy) => (
-        <line
-          key={dy}
-          x1={wallX}
-          y1={wallY + dy}
-          x2={wallX + wallW}
-          y2={wallY + dy}
-          stroke="#1a110a"
-          strokeWidth={1}
-          opacity={0.6}
-        />
-      ))}
 
-      {/* Clocks laid out in a 4×2 grid. */}
+      {/* Clocks: 4 across × 2 rows on the plaque. Project the center of
+          each slot in world coords, then render the clock as a flat
+          circle in screen space (no foreshortening — it stays legible). */}
       {visible.map((t, i) => {
         const col = i % 4;
         const row = Math.floor(i / 4);
-        const cx = wallX + 90 + col * 160;
-        const cy = wallY + 80 + row * 130;
-        return <Clock key={t.id} cx={cx} cy={cy} status={t.lastStatus} />;
+        const cxw = xs + 1 + col * 2;
+        const czw = ze - 0.55 - row * 1.0;
+        const center = iso(cxw, wallY, czw);
+        return <Clock key={t.id} cx={center.x} cy={center.y} status={t.lastStatus} />;
       })}
 
       {/* Overflow badge */}
       {overflow > 0 ? (
-        <g>
-          <circle cx={wallX + wallW - 20} cy={wallY + wallH - 20} r={16} fill="#c8a25a" />
-          <text
-            x={wallX + wallW - 20}
-            y={wallY + wallH - 14}
-            textAnchor="middle"
-            fontSize={12}
-            fontWeight={600}
-            fill="#2a1a0c"
-          >
-            +{overflow}
-          </text>
-        </g>
+        (() => {
+          const c = iso(xe - 0.4, wallY, zs + 0.4);
+          return (
+            <g>
+              <circle cx={c.x} cy={c.y} r={14} fill="#c8a25a" stroke="#1a110a" strokeWidth={1.2} />
+              <text x={c.x} y={c.y + 5} textAnchor="middle" fontSize={12} fontWeight={600} fill="#2a1a0c">
+                +{overflow}
+              </text>
+            </g>
+          );
+        })()
       ) : null}
 
       {/* Empty state */}
       {crons.length === 0 ? (
-        <text
-          x={wallX + wallW / 2}
-          y={wallY + wallH / 2}
-          textAnchor="middle"
-          fontSize={14}
-          fill="#8a6a48"
-          fontStyle="italic"
-          opacity={0.7}
-        >
-          (no clocks — add a cron trigger)
-        </text>
+        (() => {
+          const c = iso((xs + xe) / 2, wallY, (zs + ze) / 2);
+          return (
+            <text
+              x={c.x}
+              y={c.y}
+              textAnchor="middle"
+              fontSize={13}
+              fill="#8a6a48"
+              opacity={0.7}
+              fontStyle="italic"
+            >
+              (no clocks yet)
+            </text>
+          );
+        })()
       ) : null}
     </Workstation>
   );
@@ -120,19 +118,17 @@ function Clock({
 
   return (
     <g style={isRunning ? pulseStyle : undefined}>
-      {/* Frame */}
-      <circle cx={cx} cy={cy} r={42} fill="#3a2818" stroke="#1a110a" strokeWidth={2} />
-      {/* Face */}
-      <circle cx={cx} cy={cy} r={34} fill={face} stroke="#2a1c10" strokeWidth={1} />
-      {/* 12 / 3 / 6 / 9 marks */}
-      <line x1={cx} y1={cy - 30} x2={cx} y2={cy - 26} stroke="#2a1c10" strokeWidth={2} />
-      <line x1={cx + 30} y1={cy} x2={cx + 26} y2={cy} stroke="#2a1c10" strokeWidth={2} />
-      <line x1={cx} y1={cy + 30} x2={cx} y2={cy + 26} stroke="#2a1c10" strokeWidth={2} />
-      <line x1={cx - 30} y1={cy} x2={cx - 26} y2={cy} stroke="#2a1c10" strokeWidth={2} />
-      {/* Hour + minute hands at 10:10 (a friendly clock pose) */}
-      <line x1={cx} y1={cy} x2={cx - 14} y2={cy - 10} stroke="#2a1c10" strokeWidth={3} strokeLinecap="round" />
-      <line x1={cx} y1={cy} x2={cx + 16} y2={cy - 16} stroke="#2a1c10" strokeWidth={2} strokeLinecap="round" />
-      <circle cx={cx} cy={cy} r={2.5} fill="#2a1c10" />
+      <circle cx={cx} cy={cy} r={26} fill="#3a2818" stroke="#1a110a" strokeWidth={1.5} />
+      <circle cx={cx} cy={cy} r={21} fill={face} stroke="#2a1c10" strokeWidth={1} />
+      {/* 12/3/6/9 marks */}
+      <line x1={cx} y1={cy - 18} x2={cx} y2={cy - 15} stroke="#2a1c10" strokeWidth={1.5} />
+      <line x1={cx + 18} y1={cy} x2={cx + 15} y2={cy} stroke="#2a1c10" strokeWidth={1.5} />
+      <line x1={cx} y1={cy + 18} x2={cx} y2={cy + 15} stroke="#2a1c10" strokeWidth={1.5} />
+      <line x1={cx - 18} y1={cy} x2={cx - 15} y2={cy} stroke="#2a1c10" strokeWidth={1.5} />
+      {/* Hands at 10:10 */}
+      <line x1={cx} y1={cy} x2={cx - 9} y2={cy - 6} stroke="#2a1c10" strokeWidth={2} strokeLinecap="round" />
+      <line x1={cx} y1={cy} x2={cx + 10} y2={cy - 10} stroke="#2a1c10" strokeWidth={1.5} strokeLinecap="round" />
+      <circle cx={cx} cy={cy} r={1.8} fill="#2a1c10" />
     </g>
   );
 }

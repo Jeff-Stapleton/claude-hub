@@ -1,10 +1,14 @@
 import type { OrchestratorState } from '../../types.js';
+import { iso, isoBoxPoints, poly } from '../iso.js';
 import { Workstation } from './Workstation.jsx';
 
 /**
- * Mid-floor centerpiece: the orchestrator's control console. The screen
- * brightness reflects orchestrator status; a blinking indicator shows
- * whether any conversation is mid-flight.
+ * Centerpiece of the floor: an industrial-green machine with a glowing
+ * screen on the front-right face. Screen color reflects orchestrator
+ * status; an ACTIVE indicator blinks while channelSessions is non-empty.
+ *
+ * Footprint: world (4.0, 4.0) to (6.0, 6.0). Tall (h=2.2) so it reads as
+ * the central piece of equipment.
  */
 export function OrchestratorConsole({
   state,
@@ -13,109 +17,120 @@ export function OrchestratorConsole({
   state: OrchestratorState;
   onOpen: () => void;
 }): JSX.Element {
-  const baseX = 540;
-  const baseY = 470;
-  const baseW = 520;
-  const baseH = 220;
-
   const running = state.status === 'running';
   const error = state.status === 'error';
-  const screenFill = error ? '#3a1010' : running ? '#1a3020' : '#0e120e';
-  const screenGlow = running ? 0.6 : error ? 0.4 : 0.15;
   const sessionsActive = Object.keys(state.channelSessions).length > 0;
 
+  const bx = 4.0;
+  const by = 4.0;
+  const bw = 2.0;
+  const bd = 2.0;
+  const bh = 2.2;
+
+  const { topFace, rightFace, leftFace } = isoBoxPoints(bx, by, bw, bd, bh);
+
+  const screenFill = error ? '#3a1010' : running ? '#1a3020' : '#0e120e';
+  const screenStroke = error ? '#cf4040' : running ? '#5ec27a' : '#5a5a5a';
+
   return (
-    <Workstation
-      x={500}
-      y={440}
-      width={600}
-      height={240}
-      label={`Orchestrator (${state.status})`}
-      onActivate={onOpen}
-    >
-      {/* Console base */}
-      <rect
-        x={baseX}
-        y={baseY + 80}
-        width={baseW}
-        height={baseH - 80}
-        fill="#3a2818"
-        stroke="#1a110a"
-        strokeWidth={2}
-      />
-      {/* Sloped front panel */}
-      <polygon
-        points={`${baseX},${baseY + 80} ${baseX + baseW},${baseY + 80} ${baseX + baseW - 30},${baseY} ${baseX + 30},${baseY}`}
-        fill="#4a3220"
-        stroke="#1a110a"
-        strokeWidth={2}
-      />
-      {/* Screen */}
-      <rect
-        x={baseX + 60}
-        y={baseY + 14}
-        width={baseW - 120}
-        height={56}
-        fill={screenFill}
-        stroke="#0a0a0a"
-        strokeWidth={1.5}
-      />
-      {/* Screen glow */}
-      <rect
-        x={baseX + 60}
-        y={baseY + 14}
-        width={baseW - 120}
-        height={56}
-        fill={running ? '#5ec27a' : error ? '#cf4040' : '#5a5a5a'}
-        opacity={screenGlow * 0.25}
-      />
-      {/* Scanline text on the screen — pretend status readout */}
-      <text
-        x={baseX + baseW / 2}
-        y={baseY + 46}
-        textAnchor="middle"
-        fontSize={14}
-        fontFamily="monospace"
-        fill={running ? '#5ec27a' : error ? '#e88888' : '#888888'}
-        opacity={0.85}
-      >
-        ◀ {state.status.toUpperCase()} ▶
-      </text>
+    <Workstation label={`Orchestrator (${state.status})`} onActivate={onOpen}>
+      {/* Machine body — painted industrial green */}
+      <polygon points={poly(...leftFace)} fill="#2a361c" stroke="#0e1208" strokeWidth={1} />
+      <polygon points={poly(...rightFace)} fill="#3a4a2a" stroke="#0e1208" strokeWidth={1} />
+      <polygon points={poly(...topFace)} fill="#4a5e3a" stroke="#0e1208" strokeWidth={1.5} />
 
-      {/* Row of buttons / dials on the body */}
-      {[0, 1, 2, 3].map((i) => (
-        <circle
-          key={i}
-          cx={baseX + 60 + i * 50}
-          cy={baseY + 130}
-          r={9}
-          fill="#5a3a22"
-          stroke="#1a110a"
-          strokeWidth={1.5}
-        />
-      ))}
+      {/* Glowing screen on the front-right face (the face at MIN Y) */}
+      {(() => {
+        const a = iso(bx + 0.25, by, 1.4);
+        const b = iso(bx + bw - 0.25, by, 1.4);
+        const c = iso(bx + bw - 0.25, by, 1.95);
+        const d = iso(bx + 0.25, by, 1.95);
+        return (
+          <>
+            <polygon points={poly(a, b, c, d)} fill={screenFill} stroke="#0a0a0a" strokeWidth={1.5} />
+            <text
+              x={(a.x + b.x) / 2}
+              y={(a.y + d.y) / 2 + 3}
+              textAnchor="middle"
+              fontSize={11}
+              fontFamily="monospace"
+              fill={screenStroke}
+              opacity={0.9}
+            >
+              ◀ {state.status.toUpperCase()} ▶
+            </text>
+          </>
+        );
+      })()}
 
-      {/* Session-active blinking indicator */}
-      {sessionsActive ? (
-        <g>
+      {/* Buttons on the front-right face, below screen */}
+      {[0.35, 0.7, 1.05, 1.4, 1.75].map((xOffset) => {
+        const c = iso(bx + xOffset, by, 0.95);
+        return (
           <circle
-            cx={baseX + baseW - 40}
-            cy={baseY + 130}
-            r={8}
-            fill="#e8b04a"
-            style={blinkStyle}
+            key={xOffset}
+            cx={c.x}
+            cy={c.y}
+            r={5}
+            fill="#5a3a22"
+            stroke="#0e1208"
+            strokeWidth={1}
           />
-          <text
-            x={baseX + baseW - 40}
-            y={baseY + 162}
-            textAnchor="middle"
-            fontSize={10}
-            fill="#c8a888"
-            fontFamily="monospace"
-          >
-            ACTIVE
-          </text>
-        </g>
+        );
+      })}
+
+      {/* Vent grille on the front-left face (the face at MIN X) */}
+      {[0.4, 0.7, 1.0, 1.3, 1.6].map((yOffset) => {
+        const a = iso(bx, by + yOffset, 0.5);
+        const b = iso(bx, by + yOffset, 1.4);
+        return (
+          <line
+            key={yOffset}
+            x1={a.x}
+            y1={a.y}
+            x2={b.x}
+            y2={b.y}
+            stroke="#1a2210"
+            strokeWidth={2}
+          />
+        );
+      })}
+
+      {/* Top chimney/exhaust */}
+      {(() => {
+        const ch = isoBoxPoints(bx + 0.7, by + 0.7, 0.6, 0.6, 0.5);
+        const lift = bh * 58;
+        const shift = (face: { x: number; y: number }[]): { x: number; y: number }[] =>
+          face.map((pt) => ({ x: pt.x, y: pt.y - lift }));
+        return (
+          <g>
+            <polygon points={poly(...shift(ch.leftFace))} fill="#1a2210" />
+            <polygon points={poly(...shift(ch.rightFace))} fill="#2a361c" />
+            <polygon points={poly(...shift(ch.topFace))} fill="#3a4a2a" stroke="#0e1208" strokeWidth={1} />
+          </g>
+        );
+      })()}
+
+      {/* ACTIVE indicator floating above the chimney when sessions exist */}
+      {sessionsActive ? (
+        (() => {
+          const c = iso(bx + bw / 2, by + bd / 2, bh + 0.95);
+          return (
+            <g>
+              <circle cx={c.x} cy={c.y} r={7} fill="#e8b04a" style={blinkStyle} />
+              <text
+                x={c.x}
+                y={c.y + 18}
+                textAnchor="middle"
+                fontSize={9}
+                fill="#c8a888"
+                fontFamily="monospace"
+              >
+                ACTIVE
+              </text>
+            </g>
+          );
+        })()
       ) : null}
     </Workstation>
   );

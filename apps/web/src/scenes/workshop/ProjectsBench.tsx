@@ -1,12 +1,16 @@
 import type { Project } from '../../types.js';
+import { iso, isoBoxPoints, poly } from '../iso.js';
 import { Workstation } from './Workstation.jsx';
 
-const MAX_VISIBLE_TOOLS = 8;
+const MAX_VISIBLE_TOOLS = 6;
 
 /**
- * Foreground workbench. The bench surface holds up to 8 tool sprites,
- * one per registered project. Above 8, an "+N more" badge sits on the
- * end of the bench so the user knows there are more.
+ * Front-left of floor: a long workbench. Each registered project is a
+ * small wooden block sitting on the bench top. Above 6, an overflow
+ * badge sticks up on the right end.
+ *
+ * Footprint: world (1, 1.3) to (5.5, 2.6) — runs along the +X axis, so
+ * the bench's long dimension reads as left-to-right on screen.
  */
 export function ProjectsBench({
   projects,
@@ -19,132 +23,137 @@ export function ProjectsBench({
   const visible = Math.min(n, MAX_VISIBLE_TOOLS);
   const overflow = n - visible;
 
-  // Bench plank dimensions.
-  const benchX = 120;
-  const benchY = 740;
-  const benchW = 1360;
-  const benchH = 100;
+  // Bench dimensions in world units.
+  const bx = 1.0;
+  const by = 1.3;
+  const bw = 4.5;
+  const bd = 1.3;
+  const bh = 0.9;
+
+  const { topFace, rightFace, leftFace } = isoBoxPoints(bx, by, bw, bd, bh);
 
   return (
     <Workstation
-      x={100}
-      y={700}
-      width={1400}
-      height={170}
       label={`Projects bench (${n} ${n === 1 ? 'project' : 'projects'})`}
       onActivate={onOpen}
     >
-      {/* Bench top */}
-      <rect
-        x={benchX}
-        y={benchY}
-        width={benchW}
-        height={benchH}
-        rx={4}
-        fill="#5a3a22"
-        stroke="#2e1c0e"
-        strokeWidth={2}
-      />
-      {/* Wood grain hint */}
-      <line
-        x1={benchX + 20}
-        y1={benchY + 30}
-        x2={benchX + benchW - 20}
-        y2={benchY + 30}
-        stroke="#3e2716"
-        strokeWidth={1}
-        opacity={0.6}
-      />
-      <line
-        x1={benchX + 20}
-        y1={benchY + 70}
-        x2={benchX + benchW - 20}
-        y2={benchY + 70}
-        stroke="#3e2716"
-        strokeWidth={1}
-        opacity={0.6}
-      />
-      {/* Bench legs */}
-      <rect x={benchX + 20} y={benchY + benchH} width={20} height={30} fill="#3e2716" />
-      <rect x={benchX + benchW - 40} y={benchY + benchH} width={20} height={30} fill="#3e2716" />
+      {/* Bench legs as 4 thin posts at the corners (drawn first so the
+          bench top renders over them). */}
+      {[
+        [bx + 0.05, by + 0.05],
+        [bx + bw - 0.15, by + 0.05],
+        [bx + 0.05, by + bd - 0.15],
+        [bx + bw - 0.15, by + bd - 0.15],
+      ].map(([lx, ly], i) => {
+        const leg = isoBoxPoints(lx ?? 0, ly ?? 0, 0.1, 0.1, bh);
+        return (
+          <g key={i}>
+            <polygon points={poly(...leg.leftFace)} fill="#2a1a0e" />
+            <polygon points={poly(...leg.rightFace)} fill="#3a2818" />
+          </g>
+        );
+      })}
+      {/* Bench faces */}
+      <polygon points={poly(...leftFace)} fill="#34241a" stroke="#1a110a" strokeWidth={1} />
+      <polygon points={poly(...rightFace)} fill="#4a3020" stroke="#1a110a" strokeWidth={1} />
+      <polygon points={poly(...topFace)} fill="#5a3a22" stroke="#1a110a" strokeWidth={1.5} />
 
-      {/* Tools laid out evenly along the bench. */}
-      {Array.from({ length: visible }, (_, i) => {
-        const slotW = benchW / MAX_VISIBLE_TOOLS;
-        const cx = benchX + slotW * (i + 0.5);
-        const cy = benchY + 50;
-        return <Tool key={i} cx={cx} cy={cy} variant={i % 3} />;
+      {/* Wood grain stripe across the bench top */}
+      {[0.4, 0.9].map((dy) => {
+        const a = iso(bx + 0.15, by + dy, bh);
+        const b = iso(bx + bw - 0.15, by + dy, bh);
+        return (
+          <line
+            key={dy}
+            x1={a.x}
+            y1={a.y}
+            x2={b.x}
+            y2={b.y}
+            stroke="#3e2716"
+            strokeWidth={0.8}
+            opacity={0.7}
+          />
+        );
       })}
 
-      {/* Overflow indicator at the right end of the bench. */}
+      {/* Tools sitting on the bench */}
+      {Array.from({ length: visible }, (_, i) => {
+        const slot = bw / MAX_VISIBLE_TOOLS;
+        const cx = bx + slot * (i + 0.5) - 0.18;
+        const cy = by + 0.55;
+        return <Tool key={i} x={cx} y={cy} variant={i % 3} baseHeight={bh} />;
+      })}
+
+      {/* Overflow badge floating above the right end of the bench */}
       {overflow > 0 ? (
-        <g>
-          <circle cx={benchX + benchW - 30} cy={benchY - 18} r={18} fill="#c8a25a" />
-          <text
-            x={benchX + benchW - 30}
-            y={benchY - 12}
-            textAnchor="middle"
-            fontSize={14}
-            fontWeight={600}
-            fill="#2a1a0c"
-          >
-            +{overflow}
-          </text>
-        </g>
+        (() => {
+          const c = iso(bx + bw - 0.3, by + 0.5, bh + 0.9);
+          return (
+            <g>
+              <circle cx={c.x} cy={c.y} r={16} fill="#c8a25a" stroke="#1a110a" strokeWidth={1.5} />
+              <text x={c.x} y={c.y + 5} textAnchor="middle" fontSize={13} fontWeight={600} fill="#2a1a0c">
+                +{overflow}
+              </text>
+            </g>
+          );
+        })()
       ) : null}
 
-      {/* Empty-state hint: faint pencil mark on the bench. */}
+      {/* Empty state */}
       {n === 0 ? (
-        <text
-          x={benchX + benchW / 2}
-          y={benchY + benchH / 2 + 5}
-          textAnchor="middle"
-          fontSize={16}
-          fill="#8a6a48"
-          fontStyle="italic"
-          opacity={0.7}
-        >
-          (no tools yet — add a project)
-        </text>
+        (() => {
+          const c = iso(bx + bw / 2, by + bd / 2, bh + 0.6);
+          return (
+            <text
+              x={c.x}
+              y={c.y}
+              textAnchor="middle"
+              fontSize={13}
+              fill="#c8a888"
+              opacity={0.7}
+              fontStyle="italic"
+            >
+              (no tools — add a project)
+            </text>
+          );
+        })()
       ) : null}
     </Workstation>
   );
 }
 
 function Tool({
-  cx,
-  cy,
+  x,
+  y,
   variant,
+  baseHeight,
 }: {
-  cx: number;
-  cy: number;
+  x: number;
+  y: number;
   variant: number;
+  baseHeight: number;
 }): JSX.Element {
-  // Three primitive tool shapes so the bench reads as varied — these are
-  // primitives only, Phase 4 swaps in real pixel-art tool sprites.
-  if (variant === 0) {
-    // Hammer
-    return (
-      <g>
-        <rect x={cx - 4} y={cy - 30} width={8} height={50} fill="#7a5a3a" />
-        <rect x={cx - 18} y={cy - 36} width={36} height={14} fill="#9a9a9a" stroke="#2a2a2a" strokeWidth={1} />
-      </g>
-    );
-  }
-  if (variant === 1) {
-    // Wrench
-    return (
-      <g>
-        <rect x={cx - 3} y={cy - 28} width={6} height={48} fill="#8a8a8a" />
-        <circle cx={cx} cy={cy - 30} r={9} fill="none" stroke="#8a8a8a" strokeWidth={4} />
-      </g>
-    );
-  }
-  // Screwdriver
+  // A tool is a tiny isometric block. Three palette variants so the bench
+  // reads as varied. Phase 4 swaps in real pixel-art sprites.
+  const palettes = [
+    { top: '#a8843e', right: '#86692c', left: '#5e4a1e' }, // brass
+    { top: '#8a8a8a', right: '#6a6a6a', left: '#4a4a4a' }, // steel
+    { top: '#cf6a2c', right: '#a85420', left: '#7a3814' }, // copper
+  ];
+  const p = palettes[variant % palettes.length]!;
+  const w = 0.35;
+  const d = 0.22;
+  const h = 0.3;
+  const b = isoBoxPoints(x, y, w, d, h);
+  // Lift to bench top
+  const lift = baseHeight;
+  const shift = (face: { x: number; y: number }[]): { x: number; y: number }[] =>
+    face.map((pt) => ({ x: pt.x, y: pt.y - lift * 58 }));
   return (
     <g>
-      <rect x={cx - 4} y={cy - 8} width={8} height={30} fill="#cf6a2c" />
-      <rect x={cx - 2} y={cy - 30} width={4} height={22} fill="#aaaaaa" />
+      <polygon points={poly(...shift(b.leftFace))} fill={p.left} stroke="#1a110a" strokeWidth={0.6} />
+      <polygon points={poly(...shift(b.rightFace))} fill={p.right} stroke="#1a110a" strokeWidth={0.6} />
+      <polygon points={poly(...shift(b.topFace))} fill={p.top} stroke="#1a110a" strokeWidth={0.6} />
     </g>
   );
 }
