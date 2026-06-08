@@ -63,7 +63,7 @@ export function App(): JSX.Element {
       )}
       {scene === 'orchestrator' && (
         <SubScreen title="Orchestrator" onBack={() => navigate('workshop')}>
-          <OrchestratorTab state={data.orchestrator} />
+          <OrchestratorTab state={data.orchestrator} config={data.config} />
         </SubScreen>
       )}
       {scene === 'activity' && (

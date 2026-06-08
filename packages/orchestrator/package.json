@@ -19,7 +19,7 @@
     "lint": "echo \"(lint not configured yet)\""
   },
   "dependencies": {
-    "@claude-hub/cc-runner": "workspace:*",
+    "@claude-hub/agent-runner": "workspace:*",
     "@claude-hub/core": "workspace:*"
   },
   "devDependencies": {

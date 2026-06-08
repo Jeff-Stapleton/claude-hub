@@ -12,10 +12,51 @@ export interface Project {
   path: string;
   alias?: string;
   addedAt: string;
+  agentSessions: ProjectAgentSessionSummary[];
+  /** Back-compat field retained by the server for older bundles. */
   cc?: {
     sanitizedName: string;
     sessionCount: number;
     lastActivity?: string;
+  };
+}
+
+export type AgentProviderId = 'claude' | 'cursor';
+
+export interface ProjectAgentSessionSummary {
+  provider: AgentProviderId;
+  displayName: string;
+  sessionCount: number;
+  lastActivity?: string;
+}
+
+export interface ClaudeProviderConfig {
+  type: 'claude';
+  enabled: boolean;
+  cliPath?: string;
+  dangerouslySkipPermissions: boolean;
+}
+
+export interface CursorProviderConfig {
+  type: 'cursor';
+  enabled: boolean;
+  cliPath?: string;
+  model: string;
+  force: boolean;
+  trust: boolean;
+  approveMcps: boolean;
+  sandbox?: 'enabled' | 'disabled';
+}
+
+export interface AppConfig {
+  schemaVersion: number;
+  httpPort: number;
+  orchestratorTimeoutMs: number;
+  triggerTimeoutMs: number;
+  defaultProvider: AgentProviderId;
+  providers: {
+    claude: ClaudeProviderConfig;
+    cursor: CursorProviderConfig;
   };
 }
 
@@ -67,6 +108,7 @@ export interface OrchestratorState {
 }
 
 export interface UIState {
+  config: AppConfig;
   projects: Project[];
   channels: Channel[];
   triggers: Trigger[];

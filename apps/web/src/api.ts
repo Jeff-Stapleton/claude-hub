@@ -1,4 +1,4 @@
-import type { CronTrigger, Project, UIState } from './types.js';
+import type { AppConfig, CronTrigger, Project, UIState } from './types.js';
 
 export interface TriggerRunRecord {
   id: string;
@@ -48,6 +48,11 @@ export const api = {
   getState: () => req<UIState>('/api/state'),
   saveDiscord: (body: { botToken?: string; allowedUserIds?: string[] }) =>
     req<{ ok: true }>('/api/channels/discord', {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  saveConfig: (body: Partial<Pick<AppConfig, 'defaultProvider' | 'providers'>>) =>
+    req<AppConfig>('/api/config', {
       method: 'PUT',
       body: JSON.stringify(body),
     }),

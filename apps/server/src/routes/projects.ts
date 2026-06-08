@@ -1,5 +1,5 @@
-import type { Store } from '@claude-hub/core';
-import { spawnProjectSession } from '@claude-hub/cc-runner';
+import type { AgentRunner } from '@claude-hub/agent-runner';
+import type { AgentProviderId, Store } from '@claude-hub/core';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 
@@ -11,13 +11,18 @@ interface AddProjectBody {
 interface SpawnBody {
   prompt: string;
   sessionId?: string;
+  provider?: AgentProviderId;
 }
 
 /**
  * Minimal project CRUD. Path validation is intentionally lax here — the UI
  * is local-only, and the user is the only caller.
  */
-export async function registerProjectRoutes(app: FastifyInstance, store: Store): Promise<void> {
+export async function registerProjectRoutes(
+  app: FastifyInstance,
+  store: Store,
+  runner: AgentRunner,
+): Promise<void> {
   app.post<{ Body: AddProjectBody }>('/api/projects', async (req, reply) => {
     const { path, alias } = req.body ?? ({} as AddProjectBody);
     if (!path || typeof path !== 'string') {
@@ -47,9 +52,9 @@ export async function registerProjectRoutes(app: FastifyInstance, store: Store):
   });
 
   /**
-   * Synchronous one-shot spawn of Claude Code in a project's dir. Intended
+   * Synchronous one-shot spawn of the configured agent in a project's dir. Intended
    * for the orchestrator's hub-MCP tool, which needs the transcript inline
-   * rather than fire-and-forget. Timeout is enforced by cc-runner.
+   * rather than fire-and-forget. Timeout is enforced by agent-runner.
    */
   app.post<{ Params: { id: string }; Body: SpawnBody }>(
     '/api/projects/:id/spawn',
@@ -58,12 +63,13 @@ export async function registerProjectRoutes(app: FastifyInstance, store: Store):
       const project = store.projects().find((p) => p.id === id);
       if (!project) return reply.code(404).send({ error: 'project not found' });
 
-      const { prompt, sessionId } = req.body ?? ({} as SpawnBody);
+      const { prompt, sessionId, provider } = req.body ?? ({} as SpawnBody);
       if (!prompt || typeof prompt !== 'string') {
         return reply.code(400).send({ error: 'prompt is required' });
       }
 
-      const result = await spawnProjectSession({
+      const result = await runner.runProjectSession({
+        ...(provider ? { provider } : {}),
         cwd: project.path,
         prompt,
         ...(sessionId ? { sessionId } : {}),

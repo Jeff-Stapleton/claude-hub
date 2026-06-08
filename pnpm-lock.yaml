@@ -23,12 +23,12 @@ importers:
 
   apps/server:
     dependencies:
+      '@claude-hub/agent-runner':
+        specifier: workspace:*
+        version: link:../../packages/agent-runner
       '@claude-hub/cc-config-reader':
         specifier: workspace:*
         version: link:../../packages/cc-config-reader
-      '@claude-hub/cc-runner':
-        specifier: workspace:*
-        version: link:../../packages/cc-runner
       '@claude-hub/channels':
         specifier: workspace:*
         version: link:../../packages/channels
@@ -100,6 +100,25 @@ importers:
       vite:
         specifier: ^5.4.8
         version: 5.4.21(@types/node@22.19.17)
+      vitest:
+        specifier: ^2.1.1
+        version: 2.1.9(@types/node@22.19.17)
+
+  packages/agent-runner:
+    dependencies:
+      '@claude-hub/cc-runner':
+        specifier: workspace:*
+        version: link:../cc-runner
+      '@claude-hub/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.7.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.6.2
+        version: 5.9.3
       vitest:
         specifier: ^2.1.1
         version: 2.1.9(@types/node@22.19.17)
@@ -184,9 +203,9 @@ importers:
 
   packages/orchestrator:
     dependencies:
-      '@claude-hub/cc-runner':
+      '@claude-hub/agent-runner':
         specifier: workspace:*
-        version: link:../cc-runner
+        version: link:../agent-runner
       '@claude-hub/core':
         specifier: workspace:*
         version: link:../core
@@ -203,9 +222,9 @@ importers:
 
   packages/triggers:
     dependencies:
-      '@claude-hub/cc-runner':
+      '@claude-hub/agent-runner':
         specifier: workspace:*
-        version: link:../cc-runner
+        version: link:../agent-runner
       '@claude-hub/core':
         specifier: workspace:*
         version: link:../core

@@ -1,0 +1,18 @@
+---
+description: UI, API, WebSocket, and redaction contracts
+alwaysApply: true
+---
+
+# UI And API State Contracts
+
+The server owns persisted state and publishes a redacted `UIState` to the browser.
+
+- `GET /api/state` and `/ws` both use the full `UIState` shape from `apps/server/src/state.ts`.
+- WebSocket updates are fat patches: send `{ type: "state", payload: UIState }` and let the UI replace the React Query `['state']` cache.
+- Do not introduce per-field WS diffs unless payload size becomes a proven problem.
+- Secrets must be stripped in `apps/server/src/state.ts` before reaching the UI. Use boolean flags like `botTokenSet` or `secretSet`.
+- User-generated secrets should be returned plaintext exactly once on creation.
+- Browser-side types live in `apps/web/src/types.ts` and intentionally mirror only the fields the UI renders.
+- UI mutations should invalidate `['state']` after success unless they directly update the cache with a complete `UIState`.
+- New API routes should validate inputs, route persistent changes through `Store.update`, and preserve the loopback-only local trust model.
+- Keep route handlers thin. Shared business logic belongs in packages or feature-local helpers.

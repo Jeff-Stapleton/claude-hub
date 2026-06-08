@@ -1,0 +1,18 @@
+---
+description: Core architecture for claude-hub agent work
+alwaysApply: true
+---
+
+# Project Architecture
+
+`claude-hub` is a local-first GUI and bridge for running agent providers against user-registered projects. Cursor CLI is the preferred development tooling, but the app supports multiple runtime providers.
+
+- Agent execution goes through `@claude-hub/agent-runner`. Do not call provider CLIs directly from server, orchestrator, trigger, or route code.
+- Supported providers are `claude` and `cursor`, configured through `AppConfig.defaultProvider` and `AppConfig.providers`.
+- Channels are conversational and orchestrator-mediated. v1 ships Discord DMs.
+- Triggers are deterministic, one-way, and not orchestrator-mediated. Cron and webhook triggers run directly against the selected project.
+- Keep the Channels vs Triggers split. Do not route webhook traffic through the orchestrator.
+- The orchestrator is not a long-lived provider subprocess. It performs one CLI print-mode run per incoming message and persists provider-qualified session ids in `orchestrator.channelSessions`.
+- `hub-mcp` is a separate stdio MCP server. It delegates to the hub HTTP API so the hub remains the single writer.
+- Claude MCP uses the generated `--mcp-config` path. Cursor MCP is scoped to the orchestrator workdir through `.cursor/mcp.json`.
+- Cross-cutting shared types belong in `packages/core/src/types.ts`. Avoid package cycles.

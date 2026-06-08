@@ -2,15 +2,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentRunner } from '@claude-hub/agent-runner';
 import { HubPaths, Store, type Project, type CronTrigger } from '@claude-hub/core';
 import { TriggerRunner } from '../src/runner.js';
 
-// Mock cc-runner so we don't spawn real claude processes.
-vi.mock('@claude-hub/cc-runner', () => ({
-  spawnProjectSession: vi.fn(),
-}));
-import { spawnProjectSession } from '@claude-hub/cc-runner';
-const mockSpawn = vi.mocked(spawnProjectSession);
+const mockRun = vi.fn<AgentRunner['runProjectSession']>();
+const agentRunner: AgentRunner = {
+  runProjectSession: mockRun,
+};
 
 function makeTrigger(overrides?: Partial<CronTrigger>): CronTrigger {
   return {
@@ -41,24 +40,24 @@ describe('TriggerRunner', () => {
     await store.update('projects', [project]);
     // Seed a default trigger so markTriggerLast can find and update it.
     await store.update('triggers', [makeTrigger()]);
-    mockSpawn.mockReset();
+    mockRun.mockReset();
   });
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('sets lastStatus to "running" before CC spawn completes', async () => {
+  it('sets lastStatus to "running" before agent spawn completes', async () => {
     // Make the spawn hang until we release it so we can inspect
     // intermediate state.
     let resolveSpawn!: (v: unknown) => void;
-    mockSpawn.mockReturnValue(
+    mockRun.mockReturnValue(
       new Promise((resolve) => {
         resolveSpawn = resolve;
       }),
     );
 
-    const runner = new TriggerRunner(store);
+    const runner = new TriggerRunner(store, agentRunner);
     const trigger = makeTrigger();
 
     // Start the run but don't await — we want to inspect mid-flight state.
@@ -74,6 +73,7 @@ describe('TriggerRunner', () => {
     // Now let the spawn complete so the test cleans up.
     resolveSpawn({
       ok: true,
+      provider: 'claude',
       sessionId: 's1',
       text: 'done',
       durationMs: 10,
@@ -87,25 +87,26 @@ describe('TriggerRunner', () => {
     expect(after?.lastStatus).toBe('success');
   });
 
-  it('passes timeoutMs from constructor to cc-runner', async () => {
-    mockSpawn.mockResolvedValue({
+  it('passes timeoutMs from constructor to agent-runner', async () => {
+    mockRun.mockResolvedValue({
       ok: true,
+      provider: 'claude',
       sessionId: 's1',
       text: 'ok',
       durationMs: 10,
       raw: {} as never,
     });
 
-    const runner = new TriggerRunner(store, { timeoutMs: 999_999 });
+    const runner = new TriggerRunner(store, agentRunner, { timeoutMs: 999_999 });
     await runner.run(makeTrigger());
 
-    expect(mockSpawn).toHaveBeenCalledWith(
+    expect(mockRun).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 999_999 }),
     );
   });
 
   it('records error when project is missing', async () => {
-    const runner = new TriggerRunner(store);
+    const runner = new TriggerRunner(store, agentRunner);
     const trigger = makeTrigger({ projectId: 'nonexistent' });
     const result = await runner.run(trigger);
 
@@ -113,15 +114,16 @@ describe('TriggerRunner', () => {
     expect(result.error).toMatch(/not found/);
   });
 
-  it('records error when CC spawn fails', async () => {
-    mockSpawn.mockResolvedValue({
+  it('records error when agent spawn fails', async () => {
+    mockRun.mockResolvedValue({
       ok: false,
+      provider: 'claude',
       error: 'timed out after 600000ms',
       stderr: '',
       exitCode: null,
     });
 
-    const runner = new TriggerRunner(store);
+    const runner = new TriggerRunner(store, agentRunner);
     const result = await runner.run(makeTrigger());
 
     expect(result.status).toBe('error');
@@ -129,15 +131,16 @@ describe('TriggerRunner', () => {
   });
 
   it('emits started and finished events', async () => {
-    mockSpawn.mockResolvedValue({
+    mockRun.mockResolvedValue({
       ok: true,
+      provider: 'claude',
       sessionId: 's1',
       text: 'done',
       durationMs: 10,
       raw: {} as never,
     });
 
-    const runner = new TriggerRunner(store);
+    const runner = new TriggerRunner(store, agentRunner);
     const events: string[] = [];
     runner.on('started', () => events.push('started'));
     runner.on('finished', () => events.push('finished'));
@@ -147,15 +150,16 @@ describe('TriggerRunner', () => {
   });
 
   it('writes run to history file', async () => {
-    mockSpawn.mockResolvedValue({
+    mockRun.mockResolvedValue({
       ok: true,
+      provider: 'claude',
       sessionId: 's1',
       text: 'result text',
       durationMs: 100,
       raw: {} as never,
     });
 
-    const runner = new TriggerRunner(store);
+    const runner = new TriggerRunner(store, agentRunner);
     const result = await runner.run(makeTrigger());
 
     // Verify history file was written by reading it back.

@@ -1,0 +1,18 @@
+---
+description: Provider runner contract and CLI execution boundaries
+alwaysApply: true
+---
+
+# Provider Runner Contract
+
+All model/provider execution must go through `@claude-hub/agent-runner`.
+
+- Do not shell out to `agent`, `claude`, or future provider CLIs directly from server routes, triggers, channels, or orchestrator code.
+- Normalize provider output to `RunProjectSessionResult`.
+- Add provider-specific CLI flags and parsing inside `packages/agent-runner`, not at call sites.
+- Preserve `provider` on success and error results so logs, UI, and callers can distinguish providers.
+- Session continuity must use provider-qualified keys. Never resume a Claude session id with Cursor or a Cursor session id with Claude.
+- Unit tests for provider behavior should use fake CLI scripts and assert argv, parsing, timeout, and error behavior.
+- Real provider commands are smoke tests. Keep them separate from unit tests and document the exact command/result.
+- Do not rely on private Cursor session files unless Cursor exposes a stable public contract. Prefer CLI JSON `session_id`.
+- Claude-specific behavior belongs in the Claude adapter; Cursor-specific behavior belongs in the Cursor adapter.

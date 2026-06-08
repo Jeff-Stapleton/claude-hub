@@ -13,8 +13,8 @@
     "lint": "echo \"(lint not configured yet)\""
   },
   "dependencies": {
+    "@claude-hub/agent-runner": "workspace:*",
     "@claude-hub/cc-config-reader": "workspace:*",
-    "@claude-hub/cc-runner": "workspace:*",
     "@claude-hub/channels": "workspace:*",
     "@claude-hub/core": "workspace:*",
     "@claude-hub/orchestrator": "workspace:*",

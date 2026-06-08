@@ -1,7 +1,12 @@
+import { ProviderAgentRunner } from '@claude-hub/agent-runner';
 import { CCConfigReader, CCWatcher } from '@claude-hub/cc-config-reader';
 import { ChannelManager } from '@claude-hub/channels';
 import { Store } from '@claude-hub/core';
-import { Orchestrator, writeOrchestratorMcpConfig } from '@claude-hub/orchestrator';
+import {
+  Orchestrator,
+  writeCursorOrchestratorMcpConfig,
+  writeOrchestratorMcpConfig,
+} from '@claude-hub/orchestrator';
 import { CronScheduler, TriggerRunner } from '@claude-hub/triggers';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
@@ -11,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 import { registerActivityRoutes } from './routes/activity.js';
 import { registerChannelRoutes } from './routes/channels.js';
+import { registerConfigRoutes } from './routes/config.js';
 import { registerOrchestratorRoutes } from './routes/orchestrator.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerStateRoutes } from './routes/state.js';
@@ -33,7 +39,7 @@ const ACK_MESSAGES = [
   'Message noted — processing.',
   'Got it. Let me take a look.',
   'Working on this. I\'ll follow up shortly.',
-  'Heard you. Firing up Claude Code now.',
+  'Heard you. Firing up the agent now.',
   'Acknowledged. Running this through now.',
   'Received loud and clear. Working on it.',
   'On it. I\'ll report back with results.',
@@ -54,15 +60,20 @@ async function main(): Promise<void> {
   const ccWatcher = new CCWatcher(ccReader);
   ccWatcher.start();
 
-  const triggerRunner = new TriggerRunner(store, {
+  const agentRunner = new ProviderAgentRunner(() => ({
+    defaultProvider: store.config().defaultProvider,
+    providers: store.config().providers,
+  }));
+
+  const triggerRunner = new TriggerRunner(store, agentRunner, {
     timeoutMs: store.config().triggerTimeoutMs,
   });
   const cronScheduler = new CronScheduler(store, triggerRunner);
   cronScheduler.start();
 
-  // Orchestrator: write the MCP config once, set up the workdir, wire a
-  // per-DM handler. Uses approach (B) — per-message claude -p --resume —
-  // so nothing here needs a long-lived CC subprocess.
+  // Orchestrator: write MCP configs once, set up the workdir, wire a
+  // per-DM handler. Uses approach (B) — per-message CLI print runs — so
+  // nothing here needs a long-lived agent subprocess.
   const orchestratorWorkdir = store.paths.orchestratorWorkdir();
   await mkdir(orchestratorWorkdir, { recursive: true });
   const hubMcpServerPath = resolve(
@@ -70,16 +81,25 @@ async function main(): Promise<void> {
     '../../../packages/hub-mcp/dist/server.js',
   );
   const port = store.config().httpPort;
-  const mcpConfigPath = await writeOrchestratorMcpConfig({
+  const claudeMcpConfigPath = await writeOrchestratorMcpConfig({
     dir: orchestratorWorkdir,
     hubMcpServerPath,
     hubUrl: `http://127.0.0.1:${port}`,
   });
-  const orchestrator = new Orchestrator(store, {
+  await writeCursorOrchestratorMcpConfig({
     workdir: orchestratorWorkdir,
-    mcpConfigPath,
-    timeoutMs: store.config().orchestratorTimeoutMs,
+    hubMcpServerPath,
+    hubUrl: `http://127.0.0.1:${port}`,
   });
+  const orchestrator = new Orchestrator(
+    store,
+    {
+      workdir: orchestratorWorkdir,
+      claudeMcpConfigPath,
+      timeoutMs: store.config().orchestratorTimeoutMs,
+    },
+    agentRunner,
+  );
 
   const channels = new ChannelManager(store);
 
@@ -95,7 +115,7 @@ async function main(): Promise<void> {
 
   // Wire incoming channel messages through the orchestrator and reply
   // back on the originating channel. A quick ack goes out immediately so
-  // the user knows the hub received the message — CC runs can legitimately
+  // the user knows the hub received the message — agent runs can legitimately
   // take minutes-to-hours. Ack failures are logged but don't block the
   // orchestrator run; the real reply still lands when CC finishes.
   channels.start(async (msg) => {
@@ -120,7 +140,8 @@ async function main(): Promise<void> {
 
   await registerWs(app, store, ccReader, ccWatcher, channels);
   await registerStateRoutes(app, store, ccReader, channels);
-  await registerProjectRoutes(app, store);
+  await registerConfigRoutes(app, store);
+  await registerProjectRoutes(app, store, agentRunner);
   await registerTriggerRoutes(app, store, triggerRunner);
   await registerChannelRoutes(app, store);
   await registerActivityRoutes(app, store);

@@ -1,0 +1,23 @@
+---
+description: How agents know work is complete
+alwaysApply: true
+---
+
+# Definition Of Done
+
+Work is done when the requested behavior is implemented, verified, and clearly reported.
+
+- Re-read the latest user request before finalizing. Make sure the final answer responds to the newest request, not an earlier plan.
+- Keep changes scoped to the requested behavior and existing architecture.
+- Run the smallest checks that give meaningful confidence. For broad provider/runtime changes, run:
+
+```bash
+pnpm -r build
+pnpm -r typecheck
+pnpm -r test
+```
+
+- If checks cannot be run, explain exactly what was skipped and why.
+- For provider CLI behavior, prefer fake CLI unit tests. Real `agent` or `claude` calls are smoke tests and should be reported separately.
+- Before final response, check `git status --short` and be aware of unrelated pre-existing changes.
+- Final responses should summarize what changed, what was verified, and any remaining risk or manual follow-up.

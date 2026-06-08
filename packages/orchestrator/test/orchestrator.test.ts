@@ -2,15 +2,14 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { AgentRunner, RunProjectSessionResult } from '@claude-hub/agent-runner';
 import { HubPaths, Store } from '@claude-hub/core';
 import { Orchestrator } from '../src/orchestrator.js';
 
-// Mock cc-runner so we don't spawn real claude processes.
-vi.mock('@claude-hub/cc-runner', () => ({
-  spawnProjectSession: vi.fn(),
-}));
-import { spawnProjectSession } from '@claude-hub/cc-runner';
-const mockSpawn = vi.mocked(spawnProjectSession);
+const mockRun = vi.fn<AgentRunner['runProjectSession']>();
+const runner: AgentRunner = {
+  runProjectSession: mockRun,
+};
 
 function makeMsg(text: string, conversationId = 'user-1') {
   return {
@@ -31,12 +30,16 @@ describe('Orchestrator', () => {
     root = await mkdtemp(join(tmpdir(), 'orch-test-'));
     store = new Store(new HubPaths(root));
     await store.load();
-    orchestrator = new Orchestrator(store, {
-      workdir: root,
-      mcpConfigPath: '/fake/mcp-config.json',
-      timeoutMs: 5000,
-    });
-    mockSpawn.mockReset();
+    orchestrator = new Orchestrator(
+      store,
+      {
+        workdir: root,
+        claudeMcpConfigPath: '/fake/mcp-config.json',
+        timeoutMs: 5000,
+      },
+      runner,
+    );
+    mockRun.mockReset();
   });
 
   afterEach(async () => {
@@ -44,8 +47,9 @@ describe('Orchestrator', () => {
   });
 
   it('returns text from a successful CC run', async () => {
-    mockSpawn.mockResolvedValue({
+    mockRun.mockResolvedValue({
       ok: true,
+      provider: 'claude',
       sessionId: 'sess-1',
       text: 'hello world',
       durationMs: 100,
@@ -57,8 +61,9 @@ describe('Orchestrator', () => {
   });
 
   it('persists the session id per conversation for resume', async () => {
-    mockSpawn.mockResolvedValue({
+    mockRun.mockResolvedValue({
       ok: true,
+      provider: 'claude',
       sessionId: 'sess-abc',
       text: 'first',
       durationMs: 50,
@@ -67,42 +72,44 @@ describe('Orchestrator', () => {
 
     await orchestrator.handle(makeMsg('turn 1'));
     const state = store.orchestrator();
-    expect(state.channelSessions['discord:user-1']).toBe('sess-abc');
+    expect(state.channelSessions['claude:discord:user-1']).toBe('sess-abc');
 
     // Second call should pass the session id for resume.
-    mockSpawn.mockResolvedValue({
+    mockRun.mockResolvedValue({
       ok: true,
+      provider: 'claude',
       sessionId: 'sess-abc',
       text: 'second',
       durationMs: 50,
       raw: {} as never,
     });
     await orchestrator.handle(makeMsg('turn 2'));
-    expect(mockSpawn).toHaveBeenLastCalledWith(
+    expect(mockRun).toHaveBeenLastCalledWith(
       expect.objectContaining({ sessionId: 'sess-abc' }),
     );
   });
 
   it('keeps separate sessions for different conversations', async () => {
-    mockSpawn
+    mockRun
       .mockResolvedValueOnce({
-        ok: true, sessionId: 'sess-A', text: 'a', durationMs: 10, raw: {} as never,
+        ok: true, provider: 'claude', sessionId: 'sess-A', text: 'a', durationMs: 10, raw: {} as never,
       })
       .mockResolvedValueOnce({
-        ok: true, sessionId: 'sess-B', text: 'b', durationMs: 10, raw: {} as never,
+        ok: true, provider: 'claude', sessionId: 'sess-B', text: 'b', durationMs: 10, raw: {} as never,
       });
 
     await orchestrator.handle(makeMsg('hi', 'alice'));
     await orchestrator.handle(makeMsg('hi', 'bob'));
 
     const sessions = store.orchestrator().channelSessions;
-    expect(sessions['discord:alice']).toBe('sess-A');
-    expect(sessions['discord:bob']).toBe('sess-B');
+    expect(sessions['claude:discord:alice']).toBe('sess-A');
+    expect(sessions['claude:discord:bob']).toBe('sess-B');
   });
 
   it('returns ok:false on CC failure and records the error', async () => {
-    mockSpawn.mockResolvedValue({
+    mockRun.mockResolvedValue({
       ok: false,
+      provider: 'claude',
       error: 'boom',
       stderr: 'stack trace',
       exitCode: 1,
@@ -118,13 +125,14 @@ describe('Orchestrator', () => {
     // Track the order spawn calls resolve in.
     const order: number[] = [];
     let callIndex = 0;
-    mockSpawn.mockImplementation(async () => {
+    mockRun.mockImplementation(async () => {
       const idx = callIndex++;
       // Simulate variable latency — first call takes longer.
       await new Promise((r) => setTimeout(r, idx === 0 ? 50 : 10));
       order.push(idx);
       return {
         ok: true as const,
+        provider: 'claude' as const,
         sessionId: `s-${idx}`,
         text: `r-${idx}`,
         durationMs: 10,
@@ -145,18 +153,38 @@ describe('Orchestrator', () => {
     expect(order).toEqual([0, 1]);
   });
 
-  it('passes mcpConfigPath and timeoutMs to cc-runner', async () => {
-    mockSpawn.mockResolvedValue({
-      ok: true, sessionId: 's', text: 'ok', durationMs: 10, raw: {} as never,
+  it('passes Claude MCP args and timeoutMs to the agent runner', async () => {
+    mockRun.mockResolvedValue({
+      ok: true, provider: 'claude', sessionId: 's', text: 'ok', durationMs: 10, raw: {} as never,
     });
 
     await orchestrator.handle(makeMsg('test'));
 
-    expect(mockSpawn).toHaveBeenCalledWith(
+    expect(mockRun).toHaveBeenCalledWith(
       expect.objectContaining({
+        provider: 'claude',
         extraArgs: ['--mcp-config', '/fake/mcp-config.json'],
         timeoutMs: 5000,
       }),
     );
+  });
+
+  it('does not pass Claude MCP args for Cursor sessions', async () => {
+    await store.update('config', { ...store.config(), defaultProvider: 'cursor' });
+    mockRun.mockResolvedValue({
+      ok: true,
+      provider: 'cursor',
+      sessionId: 'cursor-s',
+      text: 'ok',
+      durationMs: 10,
+      raw: {} as never,
+    });
+
+    await orchestrator.handle(makeMsg('test'));
+
+    expect(mockRun).toHaveBeenCalledWith(
+      expect.not.objectContaining({ extraArgs: expect.any(Array) }),
+    );
+    expect(store.orchestrator().channelSessions['cursor:discord:user-1']).toBe('cursor-s');
   });
 });

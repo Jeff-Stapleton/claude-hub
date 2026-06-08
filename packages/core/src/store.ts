@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { HubPaths } from './paths.js';
 import {
+  type AgentProviderConfigs,
   STORE_SCHEMA_VERSION,
   type AppConfig,
   type Channel,
@@ -18,6 +19,22 @@ const DEFAULT_CONFIG: AppConfig = {
   httpPort: 7878,
   orchestratorTimeoutMs: 4 * 60 * 60 * 1000, // 4 hours
   triggerTimeoutMs: 4 * 60 * 60 * 1000, // 4 hours
+  defaultProvider: 'claude',
+  providers: {
+    claude: {
+      type: 'claude',
+      enabled: true,
+      dangerouslySkipPermissions: true,
+    },
+    cursor: {
+      type: 'cursor',
+      enabled: true,
+      model: 'gpt-5.5',
+      force: false,
+      trust: true,
+      approveMcps: true,
+    },
+  },
 };
 
 const DEFAULT_ORCHESTRATOR: OrchestratorState = {
@@ -79,7 +96,7 @@ export class Store extends EventEmitter {
       this.paths.file('config'),
       {},
     );
-    fresh.config = { ...fresh.config, ...persisted };
+    fresh.config = mergeConfigDefaults(persisted);
     if (fresh.config.schemaVersion !== STORE_SCHEMA_VERSION) {
       throw new Error(
         `claude-hub store schema version mismatch: file=${fresh.config.schemaVersion}, ` +
@@ -186,4 +203,33 @@ async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && 'code' in err;
+}
+
+function mergeConfigDefaults(persisted: Partial<AppConfig>): AppConfig {
+  const rawProviders = (persisted.providers ?? {}) as Partial<AgentProviderConfigs>;
+  const config: AppConfig = {
+    ...DEFAULT_CONFIG,
+    ...persisted,
+    schemaVersion:
+      persisted.schemaVersion === undefined || persisted.schemaVersion === 1
+        ? STORE_SCHEMA_VERSION
+        : persisted.schemaVersion,
+    defaultProvider: persisted.defaultProvider ?? DEFAULT_CONFIG.defaultProvider,
+    providers: {
+      claude: {
+        ...DEFAULT_CONFIG.providers.claude,
+        ...(rawProviders.claude ?? {}),
+      },
+      cursor: {
+        ...DEFAULT_CONFIG.providers.cursor,
+        ...(rawProviders.cursor ?? {}),
+      },
+    },
+  };
+
+  if (!config.providers[config.defaultProvider]?.enabled) {
+    config.defaultProvider = DEFAULT_CONFIG.defaultProvider;
+  }
+
+  return config;
 }

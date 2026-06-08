@@ -1,7 +1,7 @@
 import { CCConfigReader, type CCProjectEntry } from '@claude-hub/cc-config-reader';
 import { encodeProjectPath } from '@claude-hub/cc-config-reader';
 import type { ChannelManager } from '@claude-hub/channels';
-import type { Project, Store, StoreSnapshot } from '@claude-hub/core';
+import type { AgentProviderId, AppConfig, Project, Store, StoreSnapshot } from '@claude-hub/core';
 
 /**
  * The shape returned by GET /api/state and pushed over the WS channel.
@@ -11,14 +11,24 @@ import type { Project, Store, StoreSnapshot } from '@claude-hub/core';
  * webhook secrets) are stripped before serialization.
  */
 export interface UIState {
-  projects: ProjectWithCC[];
+  config: AppConfig;
+  projects: ProjectWithAgentSessions[];
   channels: RedactedChannel[];
   triggers: RedactedTrigger[];
   orchestrator: StoreSnapshot['orchestrator'];
 }
 
-export interface ProjectWithCC extends Project {
-  /** Matched CC project dir, if one exists for the project's path. */
+export interface ProjectAgentSessionSummary {
+  provider: AgentProviderId;
+  displayName: string;
+  sessionCount: number;
+  lastActivity?: string;
+}
+
+export interface ProjectWithAgentSessions extends Project {
+  /** Matched provider session metadata, if one exists for the project's path. */
+  agentSessions: ProjectAgentSessionSummary[];
+  /** Back-compat for older web bundles during rolling local rebuilds. */
   cc?: CCProjectEntry;
 }
 
@@ -41,10 +51,20 @@ export async function buildUIState(
   const ccProjects = await ccReader.listProjects();
   const ccByName = new Map(ccProjects.map((p) => [p.sanitizedName, p]));
 
-  const projects = snapshot.projects.map<ProjectWithCC>((p) => {
+  const projects = snapshot.projects.map<ProjectWithAgentSessions>((p) => {
     const encoded = encodeProjectPath(p.path);
     const cc = ccByName.get(encoded);
-    return cc ? { ...p, cc } : p;
+    const agentSessions: ProjectAgentSessionSummary[] = cc
+      ? [
+          {
+            provider: 'claude',
+            displayName: 'Claude Code',
+            sessionCount: cc.sessionCount,
+            ...(cc.lastActivity ? { lastActivity: cc.lastActivity } : {}),
+          },
+        ]
+      : [];
+    return { ...p, agentSessions, ...(cc ? { cc } : {}) };
   });
 
   // Persisted status fields are dead — overwrite with the runtime status
@@ -71,5 +91,11 @@ export async function buildUIState(
     return t as RedactedTrigger;
   });
 
-  return { projects, channels, triggers, orchestrator: snapshot.orchestrator };
+  return {
+    config: snapshot.config,
+    projects,
+    channels,
+    triggers,
+    orchestrator: snapshot.orchestrator,
+  };
 }

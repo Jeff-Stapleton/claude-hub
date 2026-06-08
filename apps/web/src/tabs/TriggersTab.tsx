@@ -87,7 +87,7 @@ function CronCreateForm({ projects }: { projects: Project[] }): JSX.Element {
         />
       </div>
       <textarea
-        placeholder="Prompt (sent to Claude Code in the project's directory on each fire)"
+        placeholder="Prompt (sent to the configured agent in the project's directory on each fire)"
         value={prompt}
         onChange={(e) => setPrompt(e.target.value)}
         rows={3}

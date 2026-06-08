@@ -1,5 +1,5 @@
+import type { AgentRunner, RunProjectSessionResult } from '@claude-hub/agent-runner';
 import type { Store, Trigger, TriggerRun } from '@claude-hub/core';
-import { spawnProjectSession, type SpawnResult } from '@claude-hub/cc-runner';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { appendTriggerRun } from './history.js';
@@ -11,7 +11,7 @@ export interface RunTriggerInput {
 }
 
 export interface TriggerRunnerEvents {
-  /** Fired before `spawnProjectSession` is invoked. */
+  /** Fired before the configured agent provider is invoked. */
   started: (run: TriggerRun) => void;
   /** Fired after the run completes (success or error). */
   finished: (run: TriggerRun) => void;
@@ -27,6 +27,7 @@ export interface TriggerRunnerEvents {
 export class TriggerRunner extends EventEmitter {
   constructor(
     private readonly store: Store,
+    private readonly runner: AgentRunner,
     private readonly opts: { timeoutMs?: number } = {},
   ) {
     super();
@@ -74,9 +75,10 @@ export class TriggerRunner extends EventEmitter {
       return final;
     }
 
-    let result: SpawnResult;
+    let result: RunProjectSessionResult;
     try {
-      result = await spawnProjectSession({
+      result = await this.runner.runProjectSession({
+        provider: this.store.config().defaultProvider,
         cwd: project.path,
         prompt,
         ...(this.opts.timeoutMs ? { timeoutMs: this.opts.timeoutMs } : {}),

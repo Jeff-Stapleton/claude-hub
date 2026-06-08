@@ -6,7 +6,7 @@ import { HubClient } from './client.js';
 import { makeTools } from './tools.js';
 
 /**
- * Stdio MCP server registered with Claude Code via --mcp-config. It
+ * Stdio MCP server registered with agent providers via MCP config. It
  * exposes hub operations as MCP tools. All tool implementations delegate
  * to the hub's own HTTP API (the hub is the single writer), so secrets
  * stay in the hub process and UI/cron/webhook state stays consistent.
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
 
 main().catch((err) => {
   // Stdio servers must not write to stdout — that's the MCP channel. Log
-  // to stderr so `claude --debug` can surface it.
+  // to stderr so the provider CLI can surface it.
   console.error('[claude-hub mcp] fatal:', err);
   process.exit(1);
 });

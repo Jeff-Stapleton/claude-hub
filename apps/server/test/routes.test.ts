@@ -3,9 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
+import type { AgentRunner } from '@claude-hub/agent-runner';
 import { HubPaths, Store, type Trigger } from '@claude-hub/core';
 import { registerProjectRoutes } from '../src/routes/projects.js';
 import { registerChannelRoutes } from '../src/routes/channels.js';
+import { registerConfigRoutes } from '../src/routes/config.js';
 import { registerOrchestratorRoutes } from '../src/routes/orchestrator.js';
 import { registerTriggerRoutes } from '../src/routes/triggers.js';
 import type { TriggerRunner } from '@claude-hub/triggers';
@@ -14,13 +16,17 @@ describe('project routes', () => {
   let app: FastifyInstance;
   let store: Store;
   let root: string;
+  const agentRunner: AgentRunner = {
+    runProjectSession: vi.fn(),
+  };
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'routes-test-'));
     store = new Store(new HubPaths(root));
     await store.load();
     app = Fastify();
-    await registerProjectRoutes(app, store);
+    vi.mocked(agentRunner.runProjectSession).mockReset();
+    await registerProjectRoutes(app, store, agentRunner);
     await app.ready();
   });
 
@@ -78,6 +84,72 @@ describe('project routes', () => {
   it('DELETE /api/projects/:id returns 404 for unknown id', async () => {
     const res = await app.inject({ method: 'DELETE', url: '/api/projects/nope' });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('POST /api/projects/:id/spawn runs through the agent runner', async () => {
+    vi.mocked(agentRunner.runProjectSession).mockResolvedValue({
+      ok: true,
+      provider: 'cursor',
+      sessionId: 'cursor-session',
+      text: 'done',
+      durationMs: 10,
+      raw: {},
+    });
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { path: '/spawn' },
+    });
+    const id = JSON.parse(create.body).id;
+
+    const res = await app.inject({
+      method: 'POST',
+      url: `/api/projects/${id}/spawn`,
+      payload: { prompt: 'work', provider: 'cursor' },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).text).toBe('done');
+    expect(agentRunner.runProjectSession).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/spawn', prompt: 'work', provider: 'cursor' }),
+    );
+  });
+});
+
+describe('config routes', () => {
+  let app: FastifyInstance;
+  let store: Store;
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'config-routes-'));
+    store = new Store(new HubPaths(root));
+    await store.load();
+    app = Fastify();
+    await registerConfigRoutes(app, store);
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('PUT /api/config updates the default provider and Cursor model', async () => {
+    const res = await app.inject({
+      method: 'PUT',
+      url: '/api/config',
+      payload: {
+        defaultProvider: 'cursor',
+        providers: {
+          cursor: { ...store.config().providers.cursor, model: 'gpt-5.5' },
+        },
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(store.config().defaultProvider).toBe('cursor');
+    expect(store.config().providers.cursor.model).toBe('gpt-5.5');
   });
 });
 

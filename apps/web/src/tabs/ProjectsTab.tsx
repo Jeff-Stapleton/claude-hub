@@ -67,7 +67,7 @@ export function ProjectsTab({ projects }: { projects: Project[] }): JSX.Element 
           <thead>
             <tr>
               <th style={th}>Alias / Path</th>
-              <th style={th}>CC sessions</th>
+              <th style={th}>Agent sessions</th>
               <th style={th}>Last activity</th>
               <th style={th}></th>
             </tr>
@@ -79,8 +79,16 @@ export function ProjectsTab({ projects }: { projects: Project[] }): JSX.Element 
                   <div>{p.alias ?? basename(p.path)}</div>
                   <div style={{ opacity: 0.6, fontSize: 12 }}>{p.path}</div>
                 </td>
-                <td style={td}>{p.cc?.sessionCount ?? '—'}</td>
-                <td style={td}>{p.cc?.lastActivity ? fmt(p.cc.lastActivity) : '—'}</td>
+                <td style={td}>
+                  {p.agentSessions.length > 0
+                    ? p.agentSessions
+                        .map((s) => `${s.displayName}: ${s.sessionCount}`)
+                        .join(', ')
+                    : '—'}
+                </td>
+                <td style={td}>
+                  {latestActivity(p.agentSessions.map((s) => s.lastActivity)) ?? '—'}
+                </td>
                 <td style={td}>
                   <button onClick={() => deleteMutation.mutate(p.id)}>Remove</button>
                 </td>
@@ -113,6 +121,11 @@ function fmt(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+function latestActivity(values: Array<string | undefined>): string | null {
+  const latest = values.filter((v): v is string => Boolean(v)).sort().at(-1);
+  return latest ? fmt(latest) : null;
 }
 
 // Helper type to keep consumer imports tidy.

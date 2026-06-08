@@ -1,0 +1,21 @@
+---
+description: TypeScript, store, and API conventions
+alwaysApply: true
+---
+
+# TypeScript And Store Conventions
+
+- This repo uses strict ESM TypeScript. Relative imports need the `.js` extension.
+- Respect `strict`, `exactOptionalPropertyTypes`, and `noUncheckedIndexedAccess`.
+- For optional object fields, use spread-if-defined rather than assigning `undefined`.
+
+```ts
+const obj = { a, ...(b !== undefined ? { b } : {}) };
+```
+
+- Flat JSON state lives under `~/.claude-hub/`. Do not mutate those files outside `Store`.
+- Use `Store.update(key, updaterOrValue)` for persisted mutations. The updater receives a `structuredClone`, so local mutation inside the updater is safe.
+- Breaking persisted shape changes require bumping `STORE_SCHEMA_VERSION` and handling defaults or migration in `packages/core/src/store.ts`.
+- Secrets are stored locally but redacted at the API/UI boundary in `apps/server/src/state.ts`.
+- New secret values should be shown plaintext only once on creation. Do not add reveal endpoints.
+- WebSocket state updates use the fat-patch model: push full `UIState`, then let the UI replace the React Query cache.

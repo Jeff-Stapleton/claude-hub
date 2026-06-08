@@ -15,7 +15,7 @@ export function makeTools(ctx: ToolContext) {
   return {
     list_projects: {
       description:
-        'List all user-registered projects in the hub. Each project is a working directory CC can run in.',
+        'List all user-registered projects in the hub. Each project is a working directory an agent provider can run in.',
       input: z.object({}).strict(),
       handler: async () => {
         const state = await ctx.client.get<{ projects: unknown[] }>('/api/state');
@@ -37,18 +37,24 @@ export function makeTools(ctx: ToolContext) {
 
     spawn_session: {
       description:
-        'Run Claude Code with the given prompt inside the project’s directory. Returns the final assistant text plus the session id so follow-ups can resume the conversation.',
+        'Run the configured agent provider with the given prompt inside the project’s directory. Returns the final assistant text plus the session id so follow-ups can resume the conversation.',
       input: z
         .object({
           projectId: z.string(),
           prompt: z.string(),
+          provider: z.enum(['claude', 'cursor']).optional(),
           sessionId: z
             .string()
             .optional()
-            .describe('If set, resume that CC session instead of starting fresh.'),
+            .describe('If set, resume that provider session instead of starting fresh.'),
         })
         .strict(),
-      handler: async (args: { projectId: string; prompt: string; sessionId?: string }) => {
+      handler: async (args: {
+        projectId: string;
+        prompt: string;
+        provider?: 'claude' | 'cursor';
+        sessionId?: string;
+      }) => {
         const { projectId, ...body } = args;
         return ctx.client.post(`/api/projects/${encodeURIComponent(projectId)}/spawn`, body);
       },
@@ -65,7 +71,7 @@ export function makeTools(ctx: ToolContext) {
 
     create_cron_trigger: {
       description:
-        'Create a cron trigger that fires Claude Code against a project on a schedule. Cron expression is a standard 5-field expression (node-cron compatible).',
+        'Create a cron trigger that fires the configured agent provider against a project on a schedule. Cron expression is a standard 5-field expression (node-cron compatible).',
       input: z
         .object({
           name: z.string(),

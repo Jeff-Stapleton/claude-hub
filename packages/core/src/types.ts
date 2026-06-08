@@ -88,7 +88,7 @@ export interface CronTrigger {
   type: 'cron';
   name: string;
   projectId: string;
-  /** Literal prompt sent to Claude Code. */
+  /** Literal prompt sent to the configured agent provider. */
   prompt: string;
   /** Standard 5-field cron expression (node-cron compatible). */
   cronExpr: string;
@@ -139,13 +139,54 @@ export interface TriggerRun {
 
 export interface OrchestratorState {
   status: 'stopped' | 'starting' | 'running' | 'error';
-  /** Claude Code session id of the current orchestrator session, if any. */
+  /** Provider session id of the current orchestrator session, if any. */
   sessionId?: string;
   startedAt?: ISODateString;
   lastError?: string;
-  /** Map of channel id -> CC session id, for per-channel conversation continuity. */
+  /** Map of provider/channel conversation key -> provider session id. */
   channelSessions: Record<string, string>;
 }
+
+// ---------------------------------------------------------------------------
+// Agent providers
+// ---------------------------------------------------------------------------
+
+export type AgentProviderId = 'claude' | 'cursor';
+
+export interface ClaudeProviderConfig {
+  type: 'claude';
+  enabled: boolean;
+  /** Override the Claude Code CLI binary. Defaults to `claude`. */
+  cliPath?: string;
+  /**
+   * Bypass interactive permission prompts for unattended runs. Existing
+   * claude-hub behavior defaults this to true.
+   */
+  dangerouslySkipPermissions: boolean;
+}
+
+export interface CursorProviderConfig {
+  type: 'cursor';
+  enabled: boolean;
+  /** Override the Cursor CLI binary. Defaults to `agent`. */
+  cliPath?: string;
+  /** Cursor model id passed via --model. */
+  model: string;
+  /** Allow unattended edits in print mode. */
+  force: boolean;
+  /** Trust the workspace for headless runs. */
+  trust: boolean;
+  /** Auto-approve MCP servers for orchestrator runs. */
+  approveMcps: boolean;
+  sandbox?: 'enabled' | 'disabled';
+}
+
+export type AgentProviderConfig = ClaudeProviderConfig | CursorProviderConfig;
+
+export type AgentProviderConfigs = {
+  claude: ClaudeProviderConfig;
+  cursor: CursorProviderConfig;
+};
 
 // ---------------------------------------------------------------------------
 // Top-level store shape
@@ -156,7 +197,7 @@ export interface OrchestratorState {
  * file lands; the store refuses to load mismatched versions to avoid silent
  * data corruption.
  */
-export const STORE_SCHEMA_VERSION = 1;
+export const STORE_SCHEMA_VERSION = 2;
 
 export interface AppConfig {
   schemaVersion: number;
@@ -175,6 +216,10 @@ export interface AppConfig {
    * multi-step plans) need the headroom.
    */
   triggerTimeoutMs: number;
+  /** Provider used when a caller does not explicitly choose one. */
+  defaultProvider: AgentProviderId;
+  /** Provider-specific CLI settings. */
+  providers: AgentProviderConfigs;
 }
 
 export interface StoreSnapshot {

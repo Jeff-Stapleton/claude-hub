@@ -1,0 +1,29 @@
+---
+description: Verification, local safety, and common development tasks
+alwaysApply: true
+---
+
+# Verification And Safety
+
+- Before broad verification on a fresh checkout or dependency graph change, run `pnpm install` and `pnpm -r build`.
+- Standard verification is:
+
+```bash
+pnpm -r build
+pnpm -r typecheck
+pnpm -r test
+```
+
+- Real provider smoke tests are separate from unit tests. Use fake CLIs in tests and run real `agent` or `claude` commands only as explicit smoke checks.
+- Cursor CLI smoke shape:
+
+```bash
+agent -p "reply exactly OK" --output-format json --model gpt-5.5 --trust
+```
+
+- For REST endpoints, add routes under `apps/server/src/routes/`, register them in `apps/server/src/main.ts`, and route persisted mutations through `Store.update`.
+- For MCP tools, add Zod schemas and handlers in `packages/hub-mcp/src/tools.ts`. Tools should call the hub HTTP API, not mutate state directly.
+- For new channel types, implement `ChannelAdapter`, register it in `ChannelManager`, update core channel types, redact secrets, and add targeted UI.
+- For new trigger types, extend the core trigger union, runner/scheduler behavior, routes, UI, and history handling as needed.
+- Do not add UI auth, a database, built-in tunneling, long-lived orchestrator subprocesses, or in-process `hub-mcp` without asking.
+- Never use destructive git or filesystem actions against hub state without explicit user approval.

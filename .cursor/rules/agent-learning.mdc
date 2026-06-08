@@ -1,0 +1,16 @@
+---
+description: When and how to update agent rules
+alwaysApply: true
+---
+
+# Agent Learning
+
+Use rules to capture durable repo knowledge that future agents should follow.
+
+- If you discover a repeatable convention, gotcha, command, workflow, or failure mode, consider updating `.cursor/rules/*.mdc`.
+- Update rules for durable guidance only. Do not add one-off task details, temporary branch context, or speculative preferences.
+- Prefer editing an existing rule over creating overlapping guidance.
+- Keep each rule focused, concise, and model-neutral. Cursor CLI may run GPT, Claude, or other models.
+- If a new rule is needed, use `.mdc` with frontmatter and a clear `description`.
+- Use `alwaysApply: true` only for guidance that should affect every agent session. Use `globs` for file-specific conventions.
+- When rule changes are part of a task, mention them in the final response.
