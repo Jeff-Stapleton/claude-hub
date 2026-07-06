@@ -1,4 +1,11 @@
-import type { AppConfig, CronTrigger, Project, UIState } from './types.js';
+import type {
+  AppConfig,
+  CronTrigger,
+  PipelineConfig,
+  Project,
+  UIState,
+  WorkItem,
+} from './types.js';
 
 export interface TriggerRunRecord {
   id: string;
@@ -9,6 +16,12 @@ export interface TriggerRunRecord {
   prompt: string;
   transcript?: string;
   error?: string;
+}
+
+export interface ActivityEntry {
+  kind: 'trigger-run';
+  run: TriggerRunRecord;
+  triggerName: string;
 }
 
 /**
@@ -85,10 +98,32 @@ export const api = {
     }),
   listRuns: (id: string) =>
     req<TriggerRunRecord[]>(`/api/triggers/${encodeURIComponent(id)}/runs`),
-  listActivity: () =>
-    req<Array<{ kind: 'trigger-run'; run: TriggerRunRecord; triggerName: string }>>(
-      '/api/activity',
-    ),
+  listActivity: () => req<ActivityEntry[]>('/api/activity'),
+  savePipeline: (projectId: string, body: Pick<PipelineConfig, 'stages'>) =>
+    req<PipelineConfig>(`/api/projects/${encodeURIComponent(projectId)}/pipeline`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  createWorkItem: (projectId: string, body: { request: string; title?: string }) =>
+    req<WorkItem>(`/api/projects/${encodeURIComponent(projectId)}/work-items`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  approveWorkItem: (id: string) =>
+    req<WorkItem>(`/api/work-items/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  retryWorkItem: (id: string) =>
+    req<WorkItem>(`/api/work-items/${encodeURIComponent(id)}/retry`, {
+      method: 'POST',
+      body: '{}',
+    }),
+  cancelWorkItem: (id: string) =>
+    req<WorkItem>(`/api/work-items/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+      body: '{}',
+    }),
   clearOrchestratorSessions: () =>
     req<{ ok: true }>('/api/orchestrator/clear-sessions', { method: 'POST', body: '{}' }),
 };

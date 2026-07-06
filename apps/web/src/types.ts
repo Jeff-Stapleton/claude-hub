@@ -107,10 +107,93 @@ export interface OrchestratorState {
   channelSessions: Record<string, string>;
 }
 
+// ---------------------------------------------------------------------------
+// Pipelines / work items (assembly line)
+// ---------------------------------------------------------------------------
+
+export type PipelineStageId = 'intake' | 'spec' | 'code' | 'test' | 'deploy' | 'monitor';
+
+export const PIPELINE_STAGE_ORDER: readonly PipelineStageId[] = [
+  'intake',
+  'spec',
+  'code',
+  'test',
+  'deploy',
+  'monitor',
+];
+
+export type StageGate = 'auto' | 'approval';
+
+export interface StageConfig {
+  enabled: boolean;
+  gate: StageGate;
+  promptTemplate?: string;
+  provider?: AgentProviderId;
+  commands?: string[];
+  timeoutMs?: number;
+  /** Monitor stage only. */
+  intervalMinutes?: number;
+  /** Monitor stage only. */
+  maxChecks?: number;
+}
+
+export interface PipelineConfig {
+  projectId: string;
+  stages: Record<PipelineStageId, StageConfig>;
+  updatedAt: string;
+}
+
+export type WorkItemSource = 'manual' | 'webhook' | 'cron' | 'channel' | 'monitor';
+
+export type WorkItemStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting-approval'
+  | 'monitoring'
+  | 'failed'
+  | 'done'
+  | 'cancelled';
+
+export type StageRunStatus =
+  | 'pending'
+  | 'skipped'
+  | 'running'
+  | 'waiting-approval'
+  | 'success'
+  | 'failed';
+
+export interface StageResult {
+  status: StageRunStatus;
+  startedAt?: string;
+  finishedAt?: string;
+  output?: string;
+  error?: string;
+  checksPassed?: number;
+}
+
+export interface WorkItem {
+  id: string;
+  projectId: string;
+  title: string;
+  request: string;
+  source: WorkItemSource;
+  sourceRef?: string;
+  status: WorkItemStatus;
+  currentStage: PipelineStageId;
+  stages: Record<PipelineStageId, StageResult>;
+  approvedStages?: PipelineStageId[];
+  createdAt: string;
+  updatedAt: string;
+  finishedAt?: string;
+}
+
 export interface UIState {
   config: AppConfig;
   projects: Project[];
   channels: Channel[];
   triggers: Trigger[];
   orchestrator: OrchestratorState;
+  /** Optional so payloads from a pre-pipeline server still render. */
+  pipelines?: PipelineConfig[];
+  workItems?: WorkItem[];
 }

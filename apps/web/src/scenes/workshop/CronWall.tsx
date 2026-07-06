@@ -2,7 +2,7 @@ import type { Trigger } from '../../types.js';
 import { FLOOR, iso, poly } from '../iso.js';
 import { Workstation } from './Workstation.jsx';
 
-const MAX_VISIBLE_CLOCKS = 8;
+const MAX_VISIBLE_CLOCKS = 6;
 
 /**
  * Mounted on the back-left wall (y = FLOOR). A grid of round clocks on
@@ -24,9 +24,9 @@ export function CronWall({
   const visible = crons.slice(0, MAX_VISIBLE_CLOCKS);
   const overflow = Math.max(0, crons.length - MAX_VISIBLE_CLOCKS);
 
-  // Plaque on back-left wall: x ∈ [1, 9], z ∈ [0.6, 2.6]
-  const xs = 1;
-  const xe = 9;
+  // Plaque on back-left wall: roughly the left 2/3 of the wall.
+  const xs = 0.8;
+  const xe = 7.2;
   const zs = 0.6;
   const ze = 2.6;
   const wallY = FLOOR;
@@ -53,13 +53,13 @@ export function CronWall({
         strokeWidth={1.2}
       />
 
-      {/* Clocks: 4 across × 2 rows on the plaque. Project the center of
+      {/* Clocks: 3 across x 2 rows on the plaque. Project the center of
           each slot in world coords, then render the clock as a flat
           circle in screen space (no foreshortening — it stays legible). */}
       {visible.map((t, i) => {
-        const col = i % 4;
-        const row = Math.floor(i / 4);
-        const cxw = xs + 1 + col * 2;
+        const col = i % 3;
+        const row = Math.floor(i / 3);
+        const cxw = xs + 1 + col * 1.95;
         const czw = ze - 0.55 - row * 1.0;
         const center = iso(cxw, wallY, czw);
         return <Clock key={t.id} cx={center.x} cy={center.y} status={t.lastStatus} />;

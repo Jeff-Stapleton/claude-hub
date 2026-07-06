@@ -3,12 +3,12 @@ import { iso, isoBoxPoints, poly } from '../iso.js';
 import { Workstation } from './Workstation.jsx';
 
 /**
- * Centerpiece of the floor: an industrial-green machine with a glowing
+ * Front-left of the floor: an industrial-green machine with a glowing
  * screen on the front-right face. Screen color reflects orchestrator
  * status; an ACTIVE indicator blinks while channelSessions is non-empty.
  *
- * Footprint: world (4.0, 4.0) to (6.0, 6.0). Tall (h=2.2) so it reads as
- * the central piece of equipment.
+ * The room center is reserved for project machines, so this console sits
+ * where the old projects bench used to live.
  */
 export function OrchestratorConsole({
   state,
@@ -21,11 +21,11 @@ export function OrchestratorConsole({
   const error = state.status === 'error';
   const sessionsActive = Object.keys(state.channelSessions).length > 0;
 
-  const bx = 4.0;
-  const by = 4.0;
-  const bw = 2.0;
-  const bd = 2.0;
-  const bh = 2.2;
+  const bx = 1.1;
+  const by = 1.45;
+  const bw = 1.8;
+  const bd = 1.45;
+  const bh = 1.9;
 
   const { topFace, rightFace, leftFace } = isoBoxPoints(bx, by, bw, bd, bh);
 

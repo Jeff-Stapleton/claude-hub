@@ -38,6 +38,9 @@ importers:
       '@claude-hub/orchestrator':
         specifier: workspace:*
         version: link:../../packages/orchestrator
+      '@claude-hub/pipeline':
+        specifier: workspace:*
+        version: link:../../packages/pipeline
       '@claude-hub/triggers':
         specifier: workspace:*
         version: link:../../packages/triggers
@@ -202,6 +205,25 @@ importers:
         version: 2.1.9(@types/node@22.19.17)
 
   packages/orchestrator:
+    dependencies:
+      '@claude-hub/agent-runner':
+        specifier: workspace:*
+        version: link:../agent-runner
+      '@claude-hub/core':
+        specifier: workspace:*
+        version: link:../core
+    devDependencies:
+      '@types/node':
+        specifier: ^22.7.0
+        version: 22.19.17
+      typescript:
+        specifier: ^5.6.2
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.1
+        version: 2.1.9(@types/node@22.19.17)
+
+  packages/pipeline:
     dependencies:
       '@claude-hub/agent-runner':
         specifier: workspace:*

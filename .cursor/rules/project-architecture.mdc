@@ -14,5 +14,6 @@ alwaysApply: true
 - Keep the Channels vs Triggers split. Do not route webhook traffic through the orchestrator.
 - The orchestrator is not a long-lived provider subprocess. It performs one CLI print-mode run per incoming message and persists provider-qualified session ids in `orchestrator.channelSessions`.
 - `hub-mcp` is a separate stdio MCP server. It delegates to the hub HTTP API so the hub remains the single writer.
+- Pipelines (`@claude-hub/pipeline`) drive per-project assembly lines: work items flow through the fixed stages intake → spec → code → test → deploy → monitor. Stage execution goes through `agent-runner` (plus generic shell commands for test/deploy/monitor); one item runs per project at a time; per-stage gates (`auto`/`approval`) control autonomy. Intake paths: manual REST, triggers with `mode: 'enqueue'` (bridged via a callback in `main.ts` — never a triggers→pipeline dependency), and the `enqueue_work_request` hub-mcp tool for channels. Monitor failures auto-file defect work items (loop-guarded for monitor-sourced items).
 - Claude MCP uses the generated `--mcp-config` path. Cursor MCP is scoped to the orchestrator workdir through `.cursor/mcp.json`.
 - Cross-cutting shared types belong in `packages/core/src/types.ts`. Avoid package cycles.

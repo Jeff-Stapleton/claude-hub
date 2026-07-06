@@ -83,6 +83,13 @@ export interface TriggerNotify {
   channelId: string;
 }
 
+/**
+ * What firing a trigger does. `'run'` (the default when absent) executes a
+ * one-shot agent run; `'enqueue'` files a work item on the project's
+ * pipeline instead, using the rendered prompt as the request text.
+ */
+export type TriggerMode = 'run' | 'enqueue';
+
 export interface CronTrigger {
   id: string;
   type: 'cron';
@@ -92,6 +99,7 @@ export interface CronTrigger {
   prompt: string;
   /** Standard 5-field cron expression (node-cron compatible). */
   cronExpr: string;
+  mode?: TriggerMode;
   notify?: TriggerNotify;
   lastRun?: ISODateString;
   lastStatus?: TriggerRunStatus;
@@ -109,6 +117,7 @@ export interface WebhookTrigger {
    * compared in constant time. Generated server-side on creation.
    */
   secret: string;
+  mode?: TriggerMode;
   notify?: TriggerNotify;
   lastRun?: ISODateString;
   lastStatus?: TriggerRunStatus;
@@ -131,6 +140,127 @@ export interface TriggerRun {
   /** Final assistant text from CC, if the run succeeded. */
   transcript?: string;
   error?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Pipelines (per-project assembly line)
+// ---------------------------------------------------------------------------
+
+/**
+ * The six fixed assembly-line stages, in execution order. Stages cannot be
+ * reordered or added to; each can be toggled on/off per project.
+ */
+export type PipelineStageId = 'intake' | 'spec' | 'code' | 'test' | 'deploy' | 'monitor';
+
+export const PIPELINE_STAGE_ORDER: readonly PipelineStageId[] = [
+  'intake',
+  'spec',
+  'code',
+  'test',
+  'deploy',
+  'monitor',
+];
+
+/**
+ * Gate applied BEFORE a stage executes. `'approval'` parks the work item
+ * until a human approves it via the UI/API; `'auto'` advances immediately.
+ */
+export type StageGate = 'auto' | 'approval';
+
+export interface StageConfig {
+  enabled: boolean;
+  gate: StageGate;
+  /** Falls back to the built-in default template for the stage. */
+  promptTemplate?: string;
+  /** Falls back to config.defaultProvider. */
+  provider?: AgentProviderId;
+  /**
+   * Shell commands run sequentially in the project cwd. Honored for
+   * test/deploy/monitor stages only; execution stops at the first failure.
+   */
+  commands?: string[];
+  /** Falls back to config.triggerTimeoutMs. */
+  timeoutMs?: number;
+}
+
+export interface MonitorStageConfig extends StageConfig {
+  /** Minutes between monitor checks. Default 30. */
+  intervalMinutes?: number;
+  /** Consecutive passing checks required to mark the item done. Default 3. */
+  maxChecks?: number;
+}
+
+export interface PipelineStages {
+  intake: StageConfig;
+  spec: StageConfig;
+  code: StageConfig;
+  test: StageConfig;
+  deploy: StageConfig;
+  monitor: MonitorStageConfig;
+}
+
+export interface PipelineConfig {
+  projectId: string;
+  stages: PipelineStages;
+  updatedAt: ISODateString;
+}
+
+// ---------------------------------------------------------------------------
+// Work items (requests flowing through a pipeline)
+// ---------------------------------------------------------------------------
+
+export type WorkItemSource = 'manual' | 'webhook' | 'cron' | 'channel' | 'monitor';
+
+export type WorkItemStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting-approval'
+  | 'monitoring'
+  | 'failed'
+  | 'done'
+  | 'cancelled';
+
+export type StageRunStatus =
+  | 'pending'
+  | 'skipped'
+  | 'running'
+  | 'waiting-approval'
+  | 'success'
+  | 'failed';
+
+export interface StageResult {
+  status: StageRunStatus;
+  startedAt?: ISODateString;
+  finishedAt?: ISODateString;
+  /** Final agent text / command output, truncated. Full text lives in JSONL. */
+  output?: string;
+  error?: string;
+  /** Consecutive passing monitor checks so far. Monitor stage only. */
+  checksPassed?: number;
+}
+
+export interface WorkItem {
+  id: string;
+  projectId: string;
+  title: string;
+  /** The raw request text driving the pipeline (prompt-template context). */
+  request: string;
+  source: WorkItemSource;
+  /** triggerId | channel conversation key | failed work item id (monitor defects). */
+  sourceRef?: string;
+  status: WorkItemStatus;
+  currentStage: PipelineStageId;
+  stages: Record<PipelineStageId, StageResult>;
+  /**
+   * Provider session ids resumed across stages, keyed by provider so a
+   * Claude session id is never fed to Cursor or vice versa.
+   */
+  sessions?: Partial<Record<AgentProviderId, string>>;
+  /** Approval-gated stages a human has approved. Survives restarts. */
+  approvedStages?: PipelineStageId[];
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+  finishedAt?: ISODateString;
 }
 
 // ---------------------------------------------------------------------------
@@ -197,7 +327,7 @@ export type AgentProviderConfigs = {
  * file lands; the store refuses to load mismatched versions to avoid silent
  * data corruption.
  */
-export const STORE_SCHEMA_VERSION = 2;
+export const STORE_SCHEMA_VERSION = 3;
 
 export interface AppConfig {
   schemaVersion: number;
@@ -228,6 +358,9 @@ export interface StoreSnapshot {
   channels: Channel[];
   triggers: Trigger[];
   orchestrator: OrchestratorState;
+  pipelines: PipelineConfig[];
+  /** Live work items only (queued/running/waiting/monitoring/failed); terminal items are archived to JSONL. */
+  workItems: WorkItem[];
 }
 
 export type StoreEntityKey = keyof StoreSnapshot;

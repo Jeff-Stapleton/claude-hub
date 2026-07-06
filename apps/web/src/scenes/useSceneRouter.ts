@@ -2,24 +2,38 @@ import { useEffect, useState } from 'react';
 
 export type SceneId =
   | 'workshop'
-  | 'projects'
   | 'channels'
   | 'triggers'
   | 'orchestrator'
-  | 'activity';
+  | 'activity'
+  | 'line';
 
 const VALID: ReadonlySet<SceneId> = new Set<SceneId>([
   'workshop',
-  'projects',
   'channels',
   'triggers',
   'orchestrator',
   'activity',
+  'line',
 ]);
 
-function readSceneFromHash(): SceneId {
+interface SceneLocation {
+  scene: SceneId;
+  /** Scene parameter — the project id for `line` (hash `#line/<id>`). */
+  param?: string;
+}
+
+function readSceneFromHash(): SceneLocation {
   const raw = window.location.hash.slice(1);
-  return VALID.has(raw as SceneId) ? (raw as SceneId) : 'workshop';
+  const slash = raw.indexOf('/');
+  const head = slash >= 0 ? raw.slice(0, slash) : raw;
+  const rest = slash >= 0 ? raw.slice(slash + 1) : '';
+  if (head === 'line' && rest) {
+    return { scene: 'line', param: decodeURIComponent(rest) };
+  }
+  return VALID.has(head as SceneId) && head !== 'line'
+    ? { scene: head as SceneId }
+    : { scene: 'workshop' };
 }
 
 /**
@@ -33,12 +47,13 @@ function readSceneFromHash(): SceneId {
  */
 export function useSceneRouter(): {
   scene: SceneId;
-  navigate: (next: SceneId) => void;
+  param: string | undefined;
+  navigate: (next: SceneId, param?: string) => void;
 } {
-  const [scene, setScene] = useState<SceneId>(readSceneFromHash);
+  const [location, setLocation] = useState<SceneLocation>(readSceneFromHash);
 
   useEffect(() => {
-    const onChange = (): void => setScene(readSceneFromHash());
+    const onChange = (): void => setLocation(readSceneFromHash());
     window.addEventListener('popstate', onChange);
     window.addEventListener('hashchange', onChange);
     return () => {
@@ -47,12 +62,17 @@ export function useSceneRouter(): {
     };
   }, []);
 
-  const navigate = (next: SceneId): void => {
-    if (next === scene) return;
-    const url = next === 'workshop' ? window.location.pathname : `#${next}`;
+  const navigate = (next: SceneId, param?: string): void => {
+    if (next === location.scene && param === location.param) return;
+    const url =
+      next === 'workshop'
+        ? window.location.pathname
+        : param !== undefined
+          ? `#${next}/${encodeURIComponent(param)}`
+          : `#${next}`;
     window.history.pushState({}, '', url);
-    setScene(next);
+    setLocation({ scene: next, ...(param !== undefined ? { param } : {}) });
   };
 
-  return { scene, navigate };
+  return { scene: location.scene, param: location.param, navigate };
 }

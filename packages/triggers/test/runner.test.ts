@@ -149,6 +149,37 @@ describe('TriggerRunner', () => {
     expect(events).toEqual(['started', 'finished']);
   });
 
+  it('enqueue-mode triggers file a work item instead of running the agent', async () => {
+    const enqueueWorkItem = vi.fn().mockResolvedValue({ id: 'wi-123' });
+    await store.update('triggers', [makeTrigger({ mode: 'enqueue' })]);
+
+    const runner = new TriggerRunner(store, agentRunner, { enqueueWorkItem });
+    const result = await runner.run(makeTrigger({ mode: 'enqueue' }));
+
+    expect(mockRun).not.toHaveBeenCalled();
+    expect(enqueueWorkItem).toHaveBeenCalledWith({
+      projectId: 'proj-1',
+      title: 'test trigger',
+      request: 'say hello',
+      source: 'cron',
+      sourceRef: 'trig-1',
+    });
+    expect(result.status).toBe('success');
+    expect(result.transcript).toBe('enqueued work item wi-123');
+    expect(store.triggers()[0]?.lastStatus).toBe('success');
+  });
+
+  it('enqueue-mode records an error when the bridge rejects', async () => {
+    const enqueueWorkItem = vi.fn().mockRejectedValue(new Error('pipeline down'));
+    await store.update('triggers', [makeTrigger({ mode: 'enqueue' })]);
+
+    const runner = new TriggerRunner(store, agentRunner, { enqueueWorkItem });
+    const result = await runner.run(makeTrigger({ mode: 'enqueue' }));
+
+    expect(result.status).toBe('error');
+    expect(result.error).toBe('pipeline down');
+  });
+
   it('writes run to history file', async () => {
     mockRun.mockResolvedValue({
       ok: true,

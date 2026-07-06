@@ -112,5 +112,40 @@ export function makeTools(ctx: ToolContext) {
       handler: async (args: { id: string }) =>
         ctx.client.del(`/api/triggers/${encodeURIComponent(args.id)}`),
     },
+
+    enqueue_work_request: {
+      description:
+        'File a work request on a project’s assembly-line pipeline. The request flows through spec → code → test → deploy → monitor stages autonomously (subject to the project’s per-stage gates). Use this instead of spawn_session when the user is asking for a feature, fix, or change that should go through the full development pipeline.',
+      input: z
+        .object({
+          projectId: z.string(),
+          request: z.string().describe('The work request text — what should be built or fixed.'),
+          title: z.string().optional().describe('Short title (defaults to the first line of the request).'),
+        })
+        .strict(),
+      handler: async (args: { projectId: string; request: string; title?: string }) => {
+        const { projectId, ...body } = args;
+        return ctx.client.post(`/api/projects/${encodeURIComponent(projectId)}/work-items`, {
+          ...body,
+          source: 'channel',
+        });
+      },
+    },
+
+    list_work_items: {
+      description:
+        'List a project’s live pipeline work items (queued, running, waiting for approval, monitoring, or failed).',
+      input: z.object({ projectId: z.string() }).strict(),
+      handler: async (args: { projectId: string }) =>
+        ctx.client.get(`/api/projects/${encodeURIComponent(args.projectId)}/work-items`),
+    },
+
+    approve_work_item: {
+      description:
+        'Approve a work item that is waiting at an approval gate (e.g. before deploy) so it continues down the pipeline.',
+      input: z.object({ id: z.string() }).strict(),
+      handler: async (args: { id: string }) =>
+        ctx.client.post(`/api/work-items/${encodeURIComponent(args.id)}/approve`, {}),
+    },
   };
 }

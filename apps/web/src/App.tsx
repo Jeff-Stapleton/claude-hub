@@ -1,11 +1,11 @@
 import type { ReactNode } from 'react';
+import { AssemblyLine } from './scenes/AssemblyLine.jsx';
 import { Scene } from './scenes/Scene.jsx';
 import { useSceneRouter } from './scenes/useSceneRouter.js';
 import { Workshop } from './scenes/Workshop.jsx';
 import { ActivityTab } from './tabs/ActivityTab.jsx';
 import { ChannelsTab } from './tabs/ChannelsTab.jsx';
 import { OrchestratorTab } from './tabs/OrchestratorTab.jsx';
-import { ProjectsTab } from './tabs/ProjectsTab.jsx';
 import { TriggersTab } from './tabs/TriggersTab.jsx';
 import { useLiveState } from './useLiveState.js';
 
@@ -18,7 +18,7 @@ import { useLiveState } from './useLiveState.js';
  * without yet touching any mutation logic.
  */
 export function App(): JSX.Element {
-  const { scene, navigate } = useSceneRouter();
+  const { scene, param, navigate } = useSceneRouter();
   const { data, isLoading, error } = useLiveState();
 
   if (isLoading) {
@@ -44,12 +44,10 @@ export function App(): JSX.Element {
   }
 
   return (
-    <Scene sceneKey={scene}>
+    <Scene sceneKey={scene === 'line' ? `line-${param ?? ''}` : scene}>
       {scene === 'workshop' && <Workshop state={data} navigate={navigate} />}
-      {scene === 'projects' && (
-        <SubScreen title="Projects" onBack={() => navigate('workshop')}>
-          <ProjectsTab projects={data.projects} />
-        </SubScreen>
+      {scene === 'line' && (
+        <AssemblyLine state={data} projectId={param ?? ''} navigate={navigate} />
       )}
       {scene === 'channels' && (
         <SubScreen title="Channels" onBack={() => navigate('workshop')}>

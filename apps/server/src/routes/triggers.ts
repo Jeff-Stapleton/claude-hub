@@ -14,6 +14,7 @@ interface CreateCronBody {
   projectId: string;
   prompt: string;
   cronExpr: string;
+  mode?: 'run' | 'enqueue';
   notify?: { channelId: string };
 }
 
@@ -21,7 +22,12 @@ interface CreateWebhookBody {
   name: string;
   projectId: string;
   promptTemplate: string;
+  mode?: 'run' | 'enqueue';
   notify?: { channelId: string };
+}
+
+function validMode(mode: unknown): mode is 'run' | 'enqueue' | undefined {
+  return mode === undefined || mode === 'run' || mode === 'enqueue';
 }
 
 /**
@@ -34,11 +40,15 @@ export async function registerTriggerRoutes(
   runner: TriggerRunner,
 ): Promise<void> {
   app.post<{ Body: CreateCronBody }>('/api/triggers/cron', async (req, reply) => {
-    const { name, projectId, prompt, cronExpr, notify } = req.body ?? ({} as CreateCronBody);
+    const { name, projectId, prompt, cronExpr, mode, notify } =
+      req.body ?? ({} as CreateCronBody);
     if (!name || !projectId || !prompt || !cronExpr) {
       return reply
         .code(400)
         .send({ error: 'name, projectId, prompt, and cronExpr are required' });
+    }
+    if (!validMode(mode)) {
+      return reply.code(400).send({ error: `invalid mode: ${String(mode)}` });
     }
     if (!cron.validate(cronExpr)) {
       return reply.code(400).send({ error: `invalid cron expression: ${cronExpr}` });
@@ -54,6 +64,7 @@ export async function registerTriggerRoutes(
       projectId,
       prompt,
       cronExpr,
+      ...(mode !== undefined ? { mode } : {}),
       ...(notify ? { notify } : {}),
     };
     await store.update('triggers', (current) => [...current, trigger]);
@@ -88,12 +99,15 @@ export async function registerTriggerRoutes(
   // ---------------------------------------------------------------------
 
   app.post<{ Body: CreateWebhookBody }>('/api/triggers/webhook', async (req, reply) => {
-    const { name, projectId, promptTemplate, notify } =
+    const { name, projectId, promptTemplate, mode, notify } =
       req.body ?? ({} as CreateWebhookBody);
     if (!name || !projectId || !promptTemplate) {
       return reply
         .code(400)
         .send({ error: 'name, projectId, and promptTemplate are required' });
+    }
+    if (!validMode(mode)) {
+      return reply.code(400).send({ error: `invalid mode: ${String(mode)}` });
     }
     if (!store.projects().some((p) => p.id === projectId)) {
       return reply.code(400).send({ error: `unknown projectId: ${projectId}` });
@@ -106,6 +120,7 @@ export async function registerTriggerRoutes(
       projectId,
       promptTemplate,
       secret: generateWebhookSecret(),
+      ...(mode !== undefined ? { mode } : {}),
       ...(notify ? { notify } : {}),
     };
     await store.update('triggers', (current) => [...current, trigger]);

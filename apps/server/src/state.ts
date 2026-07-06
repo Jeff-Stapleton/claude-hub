@@ -1,7 +1,16 @@
 import { CCConfigReader, type CCProjectEntry } from '@claude-hub/cc-config-reader';
 import { encodeProjectPath } from '@claude-hub/cc-config-reader';
 import type { ChannelManager } from '@claude-hub/channels';
-import type { AgentProviderId, AppConfig, Project, Store, StoreSnapshot } from '@claude-hub/core';
+import type {
+  AgentProviderId,
+  AppConfig,
+  PipelineConfig,
+  Project,
+  Store,
+  StoreSnapshot,
+  WorkItem,
+} from '@claude-hub/core';
+import { effectivePipelineConfig } from '@claude-hub/pipeline';
 
 /**
  * The shape returned by GET /api/state and pushed over the WS channel.
@@ -16,7 +25,13 @@ export interface UIState {
   channels: RedactedChannel[];
   triggers: RedactedTrigger[];
   orchestrator: StoreSnapshot['orchestrator'];
+  /** Effective (defaults-merged) pipeline config per registered project. */
+  pipelines: PipelineConfig[];
+  /** Live work items across all projects; provider session ids stripped. */
+  workItems: RedactedWorkItem[];
 }
+
+export type RedactedWorkItem = Omit<WorkItem, 'sessions'>;
 
 export interface ProjectAgentSessionSummary {
   provider: AgentProviderId;
@@ -91,11 +106,22 @@ export async function buildUIState(
     return t as RedactedTrigger;
   });
 
+  const pipelines = snapshot.projects.map((p) => effectivePipelineConfig(store, p.id));
+
+  // Session ids are internal resume bookkeeping, not something the UI
+  // renders — keep the fat-patch payload lean.
+  const workItems = snapshot.workItems.map<RedactedWorkItem>((it) => {
+    const { sessions: _sessions, ...rest } = it;
+    return rest;
+  });
+
   return {
     config: snapshot.config,
     projects,
     channels,
     triggers,
     orchestrator: snapshot.orchestrator,
+    pipelines,
+    workItems,
   };
 }

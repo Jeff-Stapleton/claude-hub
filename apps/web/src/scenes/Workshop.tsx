@@ -1,12 +1,14 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useState } from 'react';
+import { api } from '../api.js';
 import type { UIState } from '../types.js';
 import { FLOOR, iso, poly, WALL_H } from './iso.js';
 import type { SceneId } from './useSceneRouter.js';
 import { ChannelsRadio } from './workshop/ChannelsRadio.jsx';
-import { CronWall } from './workshop/CronWall.jsx';
+import { DebugOverlay } from './workshop/DebugOverlay.jsx';
 import { OrchestratorConsole } from './workshop/OrchestratorConsole.jsx';
-import { ProjectsBench } from './workshop/ProjectsBench.jsx';
+import { ProjectMachines } from './workshop/ProjectMachines.jsx';
 import { TimeCardWall } from './workshop/TimeCardWall.jsx';
-import { WebhookMail } from './workshop/WebhookMail.jsx';
 
 /**
  * Workshop home scene. The 16:9 stage hosts a true-isometric room with
@@ -22,8 +24,33 @@ export function Workshop({
   navigate,
 }: {
   state: UIState;
-  navigate: (s: SceneId) => void;
+  navigate: (s: SceneId, param?: string) => void;
 }): JSX.Element {
+  const qc = useQueryClient();
+  const [path, setPath] = useState('');
+  const [alias, setAlias] = useState('');
+
+  const activityQuery = useQuery({
+    queryKey: ['activity'],
+    queryFn: api.listActivity,
+    refetchInterval: 10_000,
+  });
+
+  const addMutation = useMutation({
+    mutationFn: api.addProject,
+    onSuccess: () => {
+      setPath('');
+      setAlias('');
+      void qc.invalidateQueries({ queryKey: ['state'] });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: api.deleteProject,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
+
+  const activity = activityQuery.data ?? [];
   const nothingConfigured =
     state.projects.length === 0 &&
     state.triggers.length === 0 &&
@@ -56,14 +83,39 @@ export function Workshop({
       <Floor />
 
       {/* Wall-mounted workstations (sit on the back walls). */}
-      <CronWall triggers={state.triggers} onOpen={() => navigate('triggers')} />
-      <TimeCardWall triggers={state.triggers} onOpen={() => navigate('activity')} />
+      <TimeCardWall activity={activity} onOpen={() => navigate('activity')} />
+      <ChannelsRadio channels={state.channels} onOpen={() => navigate('channels')} />
 
       {/* Floor workstations in back-to-front paint order. Back-most first. */}
-      <WebhookMail triggers={state.triggers} onOpen={() => navigate('triggers')} />
+      <ProjectMachines
+        projects={state.projects}
+        triggers={state.triggers}
+        activity={activity}
+        workItems={state.workItems ?? []}
+        onOpenTriggers={() => navigate('triggers')}
+        onOpenLine={(projectId) => navigate('line', projectId)}
+        onRemove={(projectId) => deleteMutation.mutate(projectId)}
+        removingProjectId={
+          deleteMutation.isPending ? String(deleteMutation.variables ?? '') : undefined
+        }
+      />
       <OrchestratorConsole state={state.orchestrator} onOpen={() => navigate('orchestrator')} />
-      <ChannelsRadio channels={state.channels} onOpen={() => navigate('channels')} />
-      <ProjectsBench projects={state.projects} onOpen={() => navigate('projects')} />
+
+      <ProjectAddPanel
+        path={path}
+        alias={alias}
+        error={addMutation.error}
+        isPending={addMutation.isPending}
+        onPathChange={setPath}
+        onAliasChange={setAlias}
+        onSubmit={() => {
+          if (!path.trim()) return;
+          addMutation.mutate({
+            path: path.trim(),
+            ...(alias.trim() ? { alias: alias.trim() } : {}),
+          });
+        }}
+      />
 
       {/* Warm lamp glow overlay (non-interactive) */}
       <rect x={0} y={0} width={1600} height={900} fill="url(#lampGlow)" pointerEvents="none" />
@@ -81,7 +133,57 @@ export function Workshop({
           click any workstation to begin
         </text>
       ) : null}
+
+      {import.meta.env.DEV ? <DebugOverlay /> : null}
     </svg>
+  );
+}
+
+function ProjectAddPanel({
+  path,
+  alias,
+  error,
+  isPending,
+  onPathChange,
+  onAliasChange,
+  onSubmit,
+}: {
+  path: string;
+  alias: string;
+  error: unknown;
+  isPending: boolean;
+  onPathChange: (value: string) => void;
+  onAliasChange: (value: string) => void;
+  onSubmit: () => void;
+}): JSX.Element {
+  return (
+    <foreignObject x={36} y={650} width={430} height={210}>
+      <form
+        onSubmit={(event) => {
+          event.preventDefault();
+          onSubmit();
+        }}
+        style={addPanel}
+      >
+        <div style={addPanelTitle}>Add project machine</div>
+        <input
+          placeholder="Absolute project path"
+          value={path}
+          onChange={(event) => onPathChange(event.target.value)}
+          style={addPanelInput}
+        />
+        <input
+          placeholder="Alias (optional)"
+          value={alias}
+          onChange={(event) => onAliasChange(event.target.value)}
+          style={addPanelInput}
+        />
+        <button type="submit" disabled={isPending || !path.trim()} style={addPanelButton}>
+          {isPending ? 'Building...' : 'Build machine'}
+        </button>
+        {error ? <div style={addPanelError}>{String(error)}</div> : null}
+      </form>
+    </foreignObject>
   );
 }
 
@@ -165,3 +267,50 @@ function Walls(): JSX.Element {
     </g>
   );
 }
+
+const addPanel: React.CSSProperties = {
+  boxSizing: 'border-box',
+  width: '100%',
+  height: '100%',
+  padding: 14,
+  border: '1px solid #4a3624',
+  borderRadius: 10,
+  background: 'rgba(24, 16, 10, 0.88)',
+  color: '#ead6b8',
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 8,
+  boxShadow: '0 8px 22px rgba(0, 0, 0, 0.35)',
+};
+
+const addPanelTitle: React.CSSProperties = {
+  fontSize: 14,
+  fontWeight: 600,
+  color: '#f0d8b8',
+};
+
+const addPanelInput: React.CSSProperties = {
+  minWidth: 0,
+  padding: '7px 9px',
+  borderRadius: 5,
+  border: '1px solid #5a3a22',
+  background: '#100b08',
+  color: '#eee',
+  fontSize: 12,
+};
+
+const addPanelButton: React.CSSProperties = {
+  alignSelf: 'flex-start',
+  padding: '6px 12px',
+  borderRadius: 5,
+  border: '1px solid #6a4a2a',
+  background: '#4a3020',
+  color: '#f0d8b8',
+  cursor: 'pointer',
+  fontSize: 12,
+};
+
+const addPanelError: React.CSSProperties = {
+  color: '#ff9a8a',
+  fontSize: 11,
+};

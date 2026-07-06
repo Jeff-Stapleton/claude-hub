@@ -7,6 +7,7 @@ import {
   writeCursorOrchestratorMcpConfig,
   writeOrchestratorMcpConfig,
 } from '@claude-hub/orchestrator';
+import { MonitorScheduler, PipelineRunner } from '@claude-hub/pipeline';
 import { CronScheduler, TriggerRunner } from '@claude-hub/triggers';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
@@ -18,6 +19,7 @@ import { registerActivityRoutes } from './routes/activity.js';
 import { registerChannelRoutes } from './routes/channels.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerOrchestratorRoutes } from './routes/orchestrator.js';
+import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerStateRoutes } from './routes/state.js';
 import { registerTriggerRoutes } from './routes/triggers.js';
@@ -65,11 +67,24 @@ async function main(): Promise<void> {
     providers: store.config().providers,
   }));
 
+  const pipelineRunner = new PipelineRunner(store, agentRunner, {
+    timeoutMs: store.config().triggerTimeoutMs,
+  });
+  const monitorScheduler = new MonitorScheduler(store, pipelineRunner);
+
   const triggerRunner = new TriggerRunner(store, agentRunner, {
     timeoutMs: store.config().triggerTimeoutMs,
+    // Bridge for `mode: 'enqueue'` triggers — routed through main.ts so the
+    // triggers package stays free of a pipeline dependency.
+    enqueueWorkItem: (input) => pipelineRunner.enqueue(input),
   });
   const cronScheduler = new CronScheduler(store, triggerRunner);
   cronScheduler.start();
+
+  // Re-queue work items interrupted by the previous shutdown, then arm
+  // monitor timers for anything already in the monitoring stage.
+  await pipelineRunner.recover();
+  monitorScheduler.start();
 
   // Orchestrator: write MCP configs once, set up the workdir, wire a
   // per-DM handler. Uses approach (B) — per-message CLI print runs — so
@@ -143,6 +158,7 @@ async function main(): Promise<void> {
   await registerConfigRoutes(app, store);
   await registerProjectRoutes(app, store, agentRunner);
   await registerTriggerRoutes(app, store, triggerRunner);
+  await registerPipelineRoutes(app, store, pipelineRunner);
   await registerChannelRoutes(app, store);
   await registerActivityRoutes(app, store);
   await registerOrchestratorRoutes(app, store);
@@ -171,6 +187,7 @@ async function main(): Promise<void> {
   const shutdown = async (): Promise<void> => {
     app.log.info('shutting down');
     cronScheduler.stop();
+    monitorScheduler.stop();
     await channels.stop();
     await ccWatcher.stop();
     await app.close();

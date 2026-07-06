@@ -8,10 +8,12 @@ import {
   type AppConfig,
   type Channel,
   type OrchestratorState,
+  type PipelineConfig,
   type Project,
   type StoreEntityKey,
   type StoreSnapshot,
   type Trigger,
+  type WorkItem,
 } from './types.js';
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -55,6 +57,8 @@ function emptySnapshot(): StoreSnapshot {
     channels: [],
     triggers: [],
     orchestrator: { ...DEFAULT_ORCHESTRATOR, channelSessions: {} },
+    pipelines: [],
+    workItems: [],
   };
 }
 
@@ -75,6 +79,14 @@ export class Store extends EventEmitter {
   readonly paths: HubPaths;
   private snapshot: StoreSnapshot = emptySnapshot();
   private loaded = false;
+  /**
+   * Per-file write queue. Concurrent updates to the same key (e.g. two
+   * pipeline work items advancing at once) are consistent in memory — the
+   * updater runs synchronously against the latest snapshot — but their
+   * temp-file renames race on Windows (EPERM). Chaining the writes keeps
+   * rename-over-destination strictly sequential per file.
+   */
+  private writeQueues = new Map<string, Promise<void>>();
 
   constructor(paths?: HubPaths) {
     super();
@@ -85,6 +97,8 @@ export class Store extends EventEmitter {
     await mkdir(this.paths.root, { recursive: true });
     await mkdir(this.paths.channelHistoryDir(), { recursive: true });
     await mkdir(this.paths.triggerHistoryDir(), { recursive: true });
+    await mkdir(this.paths.workItemHistoryDir(), { recursive: true });
+    await mkdir(this.paths.pipelineArchiveDir(), { recursive: true });
 
     const fresh = emptySnapshot();
 
@@ -107,6 +121,8 @@ export class Store extends EventEmitter {
     fresh.channels = await readJsonOrDefault(this.paths.file('channels'), fresh.channels);
     fresh.triggers = await readJsonOrDefault(this.paths.file('triggers'), fresh.triggers);
     fresh.orchestrator = await readJsonOrDefault(this.paths.file('orchestrator'), fresh.orchestrator);
+    fresh.pipelines = await readJsonOrDefault(this.paths.file('pipelines'), fresh.pipelines);
+    fresh.workItems = await readJsonOrDefault(this.paths.file('workItems'), fresh.workItems);
 
     this.snapshot = fresh;
     this.loaded = true;
@@ -139,6 +155,14 @@ export class Store extends EventEmitter {
     return this.get().orchestrator;
   }
 
+  pipelines(): PipelineConfig[] {
+    return this.get().pipelines;
+  }
+
+  workItems(): WorkItem[] {
+    return this.get().workItems;
+  }
+
   // -- writes ---------------------------------------------------------------
 
   /**
@@ -159,7 +183,14 @@ export class Store extends EventEmitter {
           )
         : updater;
     this.snapshot = { ...this.snapshot, [key]: next };
-    await writeJsonAtomic(this.paths.file(key), next);
+    const path = this.paths.file(key);
+    // Write the snapshot value as of write time — if several updates queue
+    // up, later writes carry the newest state and the final file matches
+    // the final in-memory snapshot.
+    const prev = this.writeQueues.get(path) ?? Promise.resolve();
+    const write = prev.then(() => writeJsonAtomic(path, this.snapshot[key]));
+    this.writeQueues.set(path, write.catch(() => undefined));
+    await write;
     this.emit('change', key, this.snapshot);
     return next;
   }
@@ -194,9 +225,13 @@ async function readJsonOrDefault<T>(path: string, fallback: T): Promise<T> {
   }
 }
 
+let tmpSeq = 0;
+
 async function writeJsonAtomic(path: string, value: unknown): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const tmp = `${path}.${process.pid}.tmp`;
+  // Sequence number keeps concurrent same-key updates (e.g. two project
+  // pipelines advancing at once) from colliding on one temp file.
+  const tmp = `${path}.${process.pid}.${++tmpSeq}.tmp`;
   await writeFile(tmp, JSON.stringify(value, null, 2), 'utf8');
   await rename(tmp, path);
 }
@@ -210,8 +245,12 @@ function mergeConfigDefaults(persisted: Partial<AppConfig>): AppConfig {
   const config: AppConfig = {
     ...DEFAULT_CONFIG,
     ...persisted,
+    // v1 -> v2 -> v3 are purely additive (new files default to [], new
+    // optional fields back-filled here), so older stores coerce forward.
     schemaVersion:
-      persisted.schemaVersion === undefined || persisted.schemaVersion === 1
+      persisted.schemaVersion === undefined ||
+      persisted.schemaVersion === 1 ||
+      persisted.schemaVersion === 2
         ? STORE_SCHEMA_VERSION
         : persisted.schemaVersion,
     defaultProvider: persisted.defaultProvider ?? DEFAULT_CONFIG.defaultProvider,

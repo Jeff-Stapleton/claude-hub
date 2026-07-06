@@ -18,6 +18,19 @@ export interface TriggerRunnerEvents {
 }
 
 /**
+ * Bridge for `mode: 'enqueue'` triggers, wired in the server's main.ts.
+ * Kept as a callback (rather than a dependency on @claude-hub/pipeline)
+ * so triggers stays cycle-free.
+ */
+export type EnqueueWorkItemBridge = (input: {
+  projectId: string;
+  title: string;
+  request: string;
+  source: 'cron' | 'webhook';
+  sourceRef: string;
+}) => Promise<{ id: string }>;
+
+/**
  * Runs a trigger: renders the prompt (webhook only), looks up the project
  * path, spawns CC, writes a history record, and emits events.
  *
@@ -28,7 +41,7 @@ export class TriggerRunner extends EventEmitter {
   constructor(
     private readonly store: Store,
     private readonly runner: AgentRunner,
-    private readonly opts: { timeoutMs?: number } = {},
+    private readonly opts: { timeoutMs?: number; enqueueWorkItem?: EnqueueWorkItemBridge } = {},
   ) {
     super();
   }
@@ -43,6 +56,13 @@ export class TriggerRunner extends EventEmitter {
       trigger.type === 'webhook'
         ? render(trigger.promptTemplate, { payload: input.payload })
         : trigger.prompt;
+
+    // Enqueue-mode triggers feed the project's assembly line instead of
+    // firing a one-shot agent run. The rendered prompt becomes the work
+    // request; the history record documents the handoff.
+    if (trigger.mode === 'enqueue' && this.opts.enqueueWorkItem) {
+      return this.enqueue(trigger, runId, startedAt, prompt, input);
+    }
 
     console.log(
       `[trigger] starting run ${runId.slice(0, 8)} for "${trigger.name}" (${trigger.type}) project=${trigger.projectId}`,
@@ -118,6 +138,56 @@ export class TriggerRunner extends EventEmitter {
     console.log(
       `[trigger] run ${runId.slice(0, 8)} ${final.status} in ${elapsed}s${final.error ? ` — ${final.error.slice(0, 100)}` : ''}`,
     );
+
+    await appendTriggerRun(this.store.paths, final);
+    await this.markTriggerLast(trigger.id, final);
+    this.emit('finished', final);
+    return final;
+  }
+
+  private async enqueue(
+    trigger: Trigger,
+    runId: string,
+    startedAt: string,
+    prompt: string,
+    input: RunTriggerInput,
+  ): Promise<TriggerRun> {
+    const base: TriggerRun = {
+      id: runId,
+      triggerId: trigger.id,
+      startedAt,
+      status: 'running',
+      prompt,
+      ...(input.payload !== undefined ? { payload: input.payload } : {}),
+    };
+    this.emit('started', base);
+
+    let final: TriggerRun;
+    try {
+      const item = await this.opts.enqueueWorkItem!({
+        projectId: trigger.projectId,
+        title: trigger.name,
+        request: prompt,
+        source: trigger.type,
+        sourceRef: trigger.id,
+      });
+      console.log(
+        `[trigger] "${trigger.name}" enqueued work item ${item.id.slice(0, 8)} (mode=enqueue)`,
+      );
+      final = {
+        ...base,
+        finishedAt: new Date().toISOString(),
+        status: 'success',
+        transcript: `enqueued work item ${item.id}`,
+      };
+    } catch (err) {
+      final = {
+        ...base,
+        finishedAt: new Date().toISOString(),
+        status: 'error',
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
 
     await appendTriggerRun(this.store.paths, final);
     await this.markTriggerLast(trigger.id, final);
