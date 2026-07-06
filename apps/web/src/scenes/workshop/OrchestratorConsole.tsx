@@ -1,22 +1,23 @@
 import type { OrchestratorState } from '../../types.js';
 import { iso, isoBoxPoints, poly } from '../iso.js';
+import { CONSOLE_D, CONSOLE_W, CONSOLE_X } from './layout.js';
 import { Workstation } from './Workstation.jsx';
 
 /**
- * Front apron of the floor (in front of the project lanes): an
+ * Standing against the back-left wall (behind the project lanes): an
  * industrial-green machine with a glowing screen on the front-right face.
  * Screen color reflects orchestrator status; an ACTIVE indicator blinks
- * while channelSessions is non-empty.
+ * while channelSessions is non-empty. Position math lives in layout.ts
+ * (CONSOLE_X / consoleY(floorD)); the parent passes the resolved y.
  */
-/** Front-corner anchor, exported for the scene's depth sort. */
-export const CONSOLE_X = 1.1;
-export const CONSOLE_Y = 0.45;
-
 export function OrchestratorConsole({
   state,
+  y,
   onOpen,
 }: {
   state: OrchestratorState;
+  /** Front-corner y from consoleY(floorD) — back face flush with the wall. */
+  y: number;
   onOpen: () => void;
 }): JSX.Element {
   const running = state.status === 'running';
@@ -24,9 +25,9 @@ export function OrchestratorConsole({
   const sessionsActive = Object.keys(state.channelSessions).length > 0;
 
   const bx = CONSOLE_X;
-  const by = CONSOLE_Y;
-  const bw = 1.8;
-  const bd = 1.45;
+  const by = y;
+  const bw = CONSOLE_W;
+  const bd = CONSOLE_D;
   const bh = 1.9;
 
   const { topFace, rightFace, leftFace } = isoBoxPoints(bx, by, bw, bd, bh);

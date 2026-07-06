@@ -18,9 +18,14 @@ import { ORIGIN_X, ORIGIN_Y, UNIT_X, UNIT_Y, UNIT_Z, WALL_H } from '../iso.js';
 
 /** Depth of one lane band. Lane content must stay inside it. */
 export const LANE_D = 3.0;
-/** Front strip reserved for the orchestrator console. */
-export const APRON_D = 2.2;
-export const BACK_MARGIN = 0.8;
+/** Small empty front margin (the console/tool box live at the back wall). */
+export const APRON_D = 0.7;
+/**
+ * Back band between the last lane and the back-left wall; hosts the
+ * orchestrator console and the tool box, both standing flush against
+ * the wall. Must exceed the deepest of their footprints.
+ */
+export const BACK_MARGIN = 1.7;
 
 /** Project head machine (the lane's nameplate) at the left end. */
 export const HEAD_X = 0.4;
@@ -58,14 +63,28 @@ export const EXIT_PARK_X = LANE_BELT_X1 - 0.6;
 export const FLOOR_W = LANE_BELT_X1 + 0.85;
 
 /**
- * Tool box crate: front apron, to the right of the orchestrator console
- * (console footprint: x 1.1..2.9, y 0.45..1.9).
+ * Orchestrator console + tool box: side by side against the back-left
+ * wall (y = floorD), inside the BACK_MARGIN band. Their y anchors depend
+ * on the floor depth, so they're functions of floorD rather than
+ * constants — the machines stay glued to the wall as lanes are added.
  */
+export const CONSOLE_X = 1.1;
+export const CONSOLE_W = 1.8;
+export const CONSOLE_D = 1.45;
 export const TOOLBOX_X = 4.1;
-export const TOOLBOX_Y = 0.55;
 export const TOOLBOX_W = 1.35;
 export const TOOLBOX_D = 1.0;
 export const TOOLBOX_H = 0.8;
+
+/** Front-corner y of the console, its back face flush with the wall. */
+export function consoleY(floorD: number): number {
+  return floorD - CONSOLE_D;
+}
+
+/** Front-corner y of the tool box, its back face flush with the wall. */
+export function toolboxY(floorD: number): number {
+  return floorD - TOOLBOX_D;
+}
 
 export function laneY(laneIndex: number): number {
   return APRON_D + laneIndex * LANE_D;

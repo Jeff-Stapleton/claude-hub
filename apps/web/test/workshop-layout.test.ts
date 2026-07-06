@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   APRON_D,
   BACK_MARGIN,
+  CONSOLE_D,
+  CONSOLE_W,
+  CONSOLE_X,
   FLOOR_W,
   HEAD_X,
   HEAD_W,
@@ -14,7 +17,7 @@ import {
   TOOLBOX_D,
   TOOLBOX_W,
   TOOLBOX_X,
-  TOOLBOX_Y,
+  consoleY,
   defaultPipeline,
   floorDepth,
   gateX,
@@ -23,6 +26,7 @@ import {
   laneY,
   sceneTransform,
   slotX,
+  toolboxY,
 } from '../src/scenes/workshop/layout.js';
 import { PIPELINE_STAGE_ORDER } from '../src/types.js';
 
@@ -85,12 +89,23 @@ describe('workshop lane layout', () => {
     expect(ghostSlotIndex(config.stages)).toBeNull(); // fully built line
   });
 
-  it('keeps the tool box inside the apron, clear of the orchestrator console', () => {
-    // Console footprint (OrchestratorConsole.tsx): x 1.1..2.9, y 0.45..1.9.
-    expect(TOOLBOX_X).toBeGreaterThan(1.1 + 1.8);
+  it('stands the console and tool box against the back wall, clear of the lanes', () => {
+    for (const n of [1, 3, 9]) {
+      const floorD = floorDepth(n);
+      // Back faces flush with the back-left wall (y = floorD).
+      expect(consoleY(floorD) + CONSOLE_D).toBe(floorD);
+      expect(toolboxY(floorD) + TOOLBOX_D).toBe(floorD);
+      // Front faces clear of the deepest lane's machines.
+      const laneContentBack = laneY(n - 1) + SLOT_LOCAL_Y + SLOT_D;
+      expect(consoleY(floorD)).toBeGreaterThan(laneContentBack);
+      expect(toolboxY(floorD)).toBeGreaterThan(laneContentBack);
+      // Both footprints fit inside the back band.
+      expect(CONSOLE_D).toBeLessThanOrEqual(BACK_MARGIN);
+      expect(TOOLBOX_D).toBeLessThanOrEqual(BACK_MARGIN);
+    }
+    // Side by side without overlap, inside the floor.
+    expect(TOOLBOX_X).toBeGreaterThan(CONSOLE_X + CONSOLE_W);
     expect(TOOLBOX_X + TOOLBOX_W).toBeLessThan(FLOOR_W);
-    expect(TOOLBOX_Y).toBeGreaterThan(0);
-    expect(TOOLBOX_Y + TOOLBOX_D).toBeLessThan(APRON_D);
   });
 
   it('grows the floor depth linearly with lane count, with a one-band minimum', () => {

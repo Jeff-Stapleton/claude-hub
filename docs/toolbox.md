@@ -1,6 +1,7 @@
 # Workshop Tool Box
 
-The tool box (the red chest in the workshop's front apron) is the catalog of
+The tool box (the red chest against the workshop's back wall, next to the
+orchestrator console) is the catalog of
 **skills** and **MCP servers** that machines can be granted access to.
 Machines get **no tools by default**: each project's station config picks
 exactly which tools that machine may use. This is a security boundary (a spec

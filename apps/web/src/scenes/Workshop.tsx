@@ -11,15 +11,17 @@ import { DebugOverlay } from './workshop/DebugOverlay.jsx';
 import { ExitChute } from './workshop/ExitChute.jsx';
 import {
   BELT_LOCAL_Y,
+  CONSOLE_X,
   FLOOR_W,
   TOOLBOX_X,
-  TOOLBOX_Y,
+  consoleY,
   defaultPipeline,
   floorDepth,
   laneY,
   sceneTransform,
+  toolboxY,
 } from './workshop/layout.js';
-import { CONSOLE_X, CONSOLE_Y, OrchestratorConsole } from './workshop/OrchestratorConsole.jsx';
+import { OrchestratorConsole } from './workshop/OrchestratorConsole.jsx';
 import { ProjectLane } from './workshop/ProjectLane.jsx';
 import { RequestIntakeForm } from './workshop/RequestIntakeForm.jsx';
 import { StationConfigPanel } from './workshop/StationConfigPanel.jsx';
@@ -173,7 +175,8 @@ export function Workshop({
     Object.keys(state.orchestrator.channelSessions).length === 0;
 
   // Floor-standing objects, depth-sorted back-to-front: each lane is one
-  // entity (lanes occupy disjoint y bands), the console sits in the apron.
+  // entity (lanes occupy disjoint y bands); the console and tool box stand
+  // against the back wall in the BACK_MARGIN band, behind every lane.
   const entities: SceneEntity[] = projects.map((project, laneIndex) => ({
     key: `lane-${project.id}`,
     anchor: { x: 0.4, y: laneY(laneIndex) },
@@ -199,16 +202,23 @@ export function Workshop({
   }));
   entities.push({
     key: 'orchestrator',
-    anchor: { x: CONSOLE_X, y: CONSOLE_Y },
-    node: <OrchestratorConsole state={state.orchestrator} onOpen={() => navigate('orchestrator')} />,
+    anchor: { x: CONSOLE_X, y: consoleY(floorD) },
+    node: (
+      <OrchestratorConsole
+        state={state.orchestrator}
+        y={consoleY(floorD)}
+        onOpen={() => navigate('orchestrator')}
+      />
+    ),
   });
   const toolbox = state.toolbox ?? EMPTY_TOOLBOX;
   entities.push({
     key: 'toolbox',
-    anchor: { x: TOOLBOX_X, y: TOOLBOX_Y },
+    anchor: { x: TOOLBOX_X, y: toolboxY(floorD) },
     node: (
       <ToolboxCrate
         toolCount={toolbox.skills.length + toolbox.mcpServers.length}
+        y={toolboxY(floorD)}
         onOpen={() => toggle({ kind: 'toolbox' })}
       />
     ),

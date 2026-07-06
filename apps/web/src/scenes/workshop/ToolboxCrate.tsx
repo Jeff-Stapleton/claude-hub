@@ -1,22 +1,26 @@
 import { iso, isoBoxPoints, poly } from '../iso.js';
-import { TOOLBOX_D, TOOLBOX_H, TOOLBOX_W, TOOLBOX_X, TOOLBOX_Y } from './layout.js';
+import { TOOLBOX_D, TOOLBOX_H, TOOLBOX_W, TOOLBOX_X } from './layout.js';
 import { Workstation } from './Workstation.jsx';
 
 /**
- * The workshop tool box: a red mechanic's chest in the front apron, next
- * to the orchestrator console. Clicking it opens the toolbox panel where
- * skills and MCP servers are created and tagged; machines only get the
- * tools explicitly assigned to them in their station config.
+ * The workshop tool box: a red mechanic's chest against the back-left
+ * wall, next to the orchestrator console. Clicking it opens the toolbox
+ * panel where skills and MCP servers are created and tagged; machines
+ * only get the tools explicitly assigned to them in their station config.
+ * Position math lives in layout.ts (TOOLBOX_X / toolboxY(floorD)).
  */
 export function ToolboxCrate({
   toolCount,
+  y,
   onOpen,
 }: {
   toolCount: number;
+  /** Front-corner y from toolboxY(floorD) — back face flush with the wall. */
+  y: number;
   onOpen: () => void;
 }): JSX.Element {
   const bx = TOOLBOX_X;
-  const by = TOOLBOX_Y;
+  const by = y;
   const bw = TOOLBOX_W;
   const bd = TOOLBOX_D;
   const bh = TOOLBOX_H;
