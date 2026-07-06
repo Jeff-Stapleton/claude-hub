@@ -1,6 +1,14 @@
 import type { PipelineStageId, StageConfig, StageRunStatus } from '../../types.js';
 import { UNIT_Z, iso, isoBoxPoints, poly } from '../iso.js';
-import { SLOT_D, SLOT_W, STAGE_META } from './layout.js';
+import {
+  BELT_H,
+  MACHINE_BELT_OFFSET,
+  SLOT_D,
+  SLOT_W,
+  STAGE_META,
+  TUNNEL_CLEAR,
+  TUNNEL_H,
+} from './layout.js';
 import { Workstation } from './Workstation.jsx';
 
 /** Per-stage silhouette: height + palette + topper so each machine reads. */
@@ -18,7 +26,10 @@ const VARIANTS: Record<
 
 /**
  * One installed stage machine on a project's lane, parameterized by world
- * position. The whole body is a Workstation hotspot — clicking opens the
+ * position. The machine straddles the belt: a tunnel mouth is cut into its
+ * -X face where the belt enters, and the belt re-emerges past the +X face
+ * (hidden from the viewer), so work visibly goes in one side and comes out
+ * the other. The whole body is a Workstation hotspot — clicking opens the
  * stage's config panel. The lamp above the screen reflects live activity.
  */
 export function StageMachine({
@@ -61,6 +72,23 @@ export function StageMachine({
           ? '#b48ad6'
           : '#5ec27a';
 
+  // Tunnel mouth on the -X face: a dark opening spanning the belt's depth,
+  // with a short throat of belt surface visible just inside it.
+  const mouthLo = y + MACHINE_BELT_OFFSET - TUNNEL_CLEAR;
+  const mouthHi = y + SLOT_D - MACHINE_BELT_OFFSET + TUNNEL_CLEAR;
+  const mouth = [
+    iso(x, mouthLo, 0),
+    iso(x, mouthHi, 0),
+    iso(x, mouthHi, TUNNEL_H),
+    iso(x, mouthLo, TUNNEL_H),
+  ];
+  const throat = [
+    iso(x, y + MACHINE_BELT_OFFSET, BELT_H),
+    iso(x, y + SLOT_D - MACHINE_BELT_OFFSET, BELT_H),
+    iso(x + TUNNEL_CLEAR, y + SLOT_D - MACHINE_BELT_OFFSET, BELT_H),
+    iso(x + TUNNEL_CLEAR, y + MACHINE_BELT_OFFSET, BELT_H),
+  ];
+
   const lamp = iso(x + SLOT_W / 2, y + SLOT_D / 2, variant.h + 0.16);
   const label = iso(x + SLOT_W / 2, y + SLOT_D / 2, variant.h + 0.5);
   const lampFill =
@@ -85,6 +113,8 @@ export function StageMachine({
           <polygon points={poly(...leftFace)} fill={variant.left} stroke="#15100c" strokeWidth={1} />
           <polygon points={poly(...rightFace)} fill={variant.right} stroke="#15100c" strokeWidth={1} />
           <polygon points={poly(...topFace)} fill={variant.top} stroke="#15100c" strokeWidth={1.4} />
+          <polygon points={poly(...mouth)} fill="#0b0908" stroke="#1c150e" strokeWidth={1} />
+          <polygon points={poly(...throat)} fill="#241f19" opacity={0.9} />
           <polygon
             points={poly(screen.a, screen.b, screen.c, screen.d)}
             fill={screenFill}

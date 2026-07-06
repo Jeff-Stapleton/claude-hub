@@ -2,6 +2,9 @@ import { describe, expect, it } from 'vitest';
 import {
   APRON_D,
   BACK_MARGIN,
+  BELT_D,
+  BELT_H,
+  BELT_LOCAL_Y,
   CONSOLE_D,
   CONSOLE_W,
   CONSOLE_X,
@@ -17,6 +20,7 @@ import {
   TOOLBOX_D,
   TOOLBOX_W,
   TOOLBOX_X,
+  TUNNEL_H,
   consoleY,
   defaultPipeline,
   floorDepth,
@@ -43,6 +47,40 @@ describe('workshop lane layout', () => {
 
   it('keeps the head machine left of the belt', () => {
     expect(HEAD_X + HEAD_W).toBeLessThanOrEqual(LANE_BELT_X0);
+  });
+
+  it('bisects each stage machine with the belt', () => {
+    // The belt runs through the machine: same depth-axis center, and the
+    // machine overhangs the belt on both sides.
+    expect(SLOT_LOCAL_Y + SLOT_D / 2).toBeCloseTo(BELT_LOCAL_Y + BELT_D / 2, 10);
+    expect(SLOT_LOCAL_Y).toBeLessThan(BELT_LOCAL_Y);
+    expect(SLOT_LOCAL_Y + SLOT_D).toBeGreaterThan(BELT_LOCAL_Y + BELT_D);
+    // The tunnel mouth clears a work item riding on the belt (box h 0.26).
+    expect(TUNNEL_H).toBeGreaterThan(BELT_H + 0.26);
+  });
+
+  it('keeps gates and parked items on the open belt between machines', () => {
+    // A parked box only clears the previous machine's front face once it
+    // is ~0.72 units past its +X face (iso view ray is (1,1,-1)).
+    for (let i = 1; i < PIPELINE_STAGE_ORDER.length; i++) {
+      const stage = PIPELINE_STAGE_ORDER[i]!;
+      const prevExit = slotX(i - 1) + SLOT_W;
+      expect(gateX(i)).toBeGreaterThan(prevExit);
+      expect(gateX(i)).toBeLessThan(slotX(i));
+      expect(itemSlot({ currentStage: stage, status: 'queued' }).x).toBeGreaterThan(prevExit + 0.72);
+      expect(itemSlot({ currentStage: stage, status: 'waiting-approval' }).x).toBeGreaterThan(prevExit + 0.72);
+    }
+  });
+
+  it('puts running items inside the machine and failed items back at its mouth', () => {
+    for (let i = 0; i < PIPELINE_STAGE_ORDER.length; i++) {
+      const stage = PIPELINE_STAGE_ORDER[i]!;
+      const running = itemSlot({ currentStage: stage, status: 'running' });
+      expect(running.x).toBeGreaterThan(slotX(i));
+      expect(running.x).toBeLessThan(slotX(i) + SLOT_W);
+      const failed = itemSlot({ currentStage: stage, status: 'failed' });
+      expect(failed.x).toBeLessThan(slotX(i));
+    }
   });
 
   it('keeps lane content inside its band so lanes sort independently', () => {
@@ -73,9 +111,13 @@ describe('workshop lane layout', () => {
     }
   });
 
-  it('parks monitoring items past the last slot, by the exit', () => {
+  it('runs the belt flush into the right wall, where the SHIPPED chute sits', () => {
+    expect(LANE_BELT_X1).toBe(FLOOR_W);
+  });
+
+  it('parks monitoring items past the last machine, by the exit', () => {
     const slot = itemSlot({ currentStage: 'monitor', status: 'monitoring' });
-    expect(slot.x).toBeGreaterThan(slotX(5));
+    expect(slot.x).toBeGreaterThan(slotX(5) + SLOT_W);
     expect(slot.x).toBeLessThanOrEqual(LANE_BELT_X1);
   });
 
@@ -136,8 +178,10 @@ describe('workshop lane layout', () => {
   });
 
   it('renders one lane at (near) full size', () => {
+    // The belt-bisecting slots stretched the lane, so "full size" is a
+    // little smaller than it was when machines sat beside the belt.
     const { s } = sceneTransform(FLOOR_W, floorDepth(1));
-    expect(s).toBeGreaterThan(0.9);
+    expect(s).toBeGreaterThan(0.8);
   });
 
   it('default pipeline mirrors the server defaults (blank line: all disabled)', () => {

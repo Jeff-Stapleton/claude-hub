@@ -40,11 +40,24 @@ export const BELT_D = 0.4;
 export const BELT_H = 0.18;
 export const LANE_BELT_X0 = HEAD_X + HEAD_W + 0.25;
 
-/** Stage machine slots behind the belt (+Y side), fixed per stage index. */
-export const SLOT_LOCAL_Y = 1.35;
-export const SLOT_W = 1.5;
+/**
+ * Stage machine slots straddle the belt: each machine is centered on the
+ * belt's depth axis so the belt bisects its footprint and runs through a
+ * tunnel in its body — work enters the mouth on the -X side and re-emerges
+ * past the +X face. SLOT_STEP leaves an open belt run between machines
+ * where gates and parked items stay visible (a parked box only clears the
+ * previous machine's front face once it is ~0.72 world units past it,
+ * because the iso view ray is (1,1,-1)).
+ */
+export const SLOT_W = 1.15;
 export const SLOT_D = 1.2;
-export const SLOT_STEP = 2.05;
+export const SLOT_STEP = 2.85;
+/** Belt inset from the machine's front/back edges (belt centered). */
+export const MACHINE_BELT_OFFSET = (SLOT_D - BELT_D) / 2;
+export const SLOT_LOCAL_Y = BELT_LOCAL_Y - MACHINE_BELT_OFFSET;
+/** Tunnel mouth cut into the machine's -X face for the belt. */
+export const TUNNEL_H = 0.62;
+export const TUNNEL_CLEAR = 0.1;
 
 export function slotX(index: number): number {
   return LANE_BELT_X0 + 0.7 + index * SLOT_STEP;
@@ -55,12 +68,18 @@ export function gateX(index: number): number {
   return slotX(index) - 0.5;
 }
 
-export const LANE_BELT_X1 = slotX(PIPELINE_STAGE_ORDER.length - 1) + SLOT_W + 0.3;
+/** The exit run past the last machine is long enough that a parked item
+ * fully clears the machine's front face in the iso view. */
+export const LANE_BELT_X1 = slotX(PIPELINE_STAGE_ORDER.length - 1) + SLOT_W + 1.2;
 /** Where monitoring items park, by the exit end of the belt. */
-export const EXIT_PARK_X = LANE_BELT_X1 - 0.6;
+export const EXIT_PARK_X = LANE_BELT_X1 - 0.45;
 
-/** Fixed floor width: the longest possible lane plus a right margin. */
-export const FLOOR_W = LANE_BELT_X1 + 0.85;
+/**
+ * Fixed floor width: the belt runs flush into the right wall, where each
+ * lane's SHIPPED chute opening sits (ExitChute), so finished work rides
+ * straight out of the workshop.
+ */
+export const FLOOR_W = LANE_BELT_X1;
 
 /**
  * Orchestrator console + tool box: side by side against the back-left
@@ -102,10 +121,13 @@ export function stageIndex(stage: PipelineStageId): number {
 
 /**
  * Lane-local belt slot for a live work item, keyed off its stage + status:
- * queued behind the slot, running under it, held at the gate, monitoring
- * parked by the exit. The lane adds laneY(k) to the returned y. Slots are
- * fixed by stage index regardless of which machines are installed, so an
- * item transiting a skipped stage still has a well-defined position.
+ * queued and held items wait on the open belt run before the machine,
+ * running items ride INSIDE the machine (the body occludes them — work
+ * went in the mouth and will come out the other side), failed items are
+ * spat back out at the mouth, and monitoring items park by the belt exit.
+ * The lane adds laneY(k) to the returned y. Slots are fixed by stage index
+ * regardless of which machines are installed, so an item transiting a
+ * skipped stage still has a well-defined position.
  */
 export function itemSlot(item: Pick<WorkItem, 'currentStage' | 'status'>): {
   x: number;
@@ -124,10 +146,11 @@ export function itemSlot(item: Pick<WorkItem, 'currentStage' | 'status'>): {
     case 'waiting-approval':
       return onBelt(gateX(i) - 0.45);
     case 'running':
-    case 'failed':
       return onBelt(slotX(i) + SLOT_W / 2 - 0.14);
+    case 'failed':
+      return onBelt(slotX(i) - 0.45);
     case 'monitoring':
-      return onBelt(EXIT_PARK_X - 0.6);
+      return onBelt(EXIT_PARK_X);
     case 'queued':
     default:
       return onBelt(slotX(i) - 0.9);
