@@ -7,6 +7,7 @@ import { DepthSorted, iso, poly, WALL_H, type SceneEntity } from './iso.js';
 import type { SceneId } from './useSceneRouter.js';
 import { AddStagePanel } from './workshop/AddStagePanel.jsx';
 import { ChannelsRadio } from './workshop/ChannelsRadio.jsx';
+import { CronClockWall } from './workshop/CronClockWall.jsx';
 import { DebugOverlay } from './workshop/DebugOverlay.jsx';
 import { ExitChute } from './workshop/ExitChute.jsx';
 import {
@@ -29,7 +30,6 @@ import { TimeCardWall } from './workshop/TimeCardWall.jsx';
 import { ToolboxCrate } from './workshop/ToolboxCrate.jsx';
 import { ToolboxPanel, type ToolboxAction } from './workshop/ToolboxPanel.jsx';
 import { WorkItemPanel } from './workshop/WorkItemPanel.jsx';
-import { WorkRequestTunnel } from './workshop/WorkRequestTunnel.jsx';
 
 /**
  * Workshop home scene — the hub's one and only room. Every project owns a
@@ -251,15 +251,27 @@ export function Workshop({
         <Walls floorW={floorW} floorD={floorD} />
         <Floor floorW={floorW} floorD={floorD} />
 
-        {/* Wall-mounted fixtures (flat on the back walls). */}
+        {/* Wall-mounted fixtures, all on the back-left wall. Right to left:
+            activity plaque (right edge floorW-0.7, 2.45 wide), cron clock
+            wall (3.3 wide), channels box (2.3 wide), with 0.5 gaps. */}
         <TimeCardWall
           activity={activity}
           wallY={floorD}
           xEnd={floorW - 0.7}
           onOpen={() => navigate('activity')}
         />
-        <ChannelsRadio channels={state.channels} wallX={floorW} onOpen={() => navigate('channels')} />
-        <WorkRequestTunnel wallX={floorW} y={floorD - 1.4} onOpen={() => navigate('triggers')} />
+        <CronClockWall
+          triggers={state.triggers}
+          wallY={floorD}
+          xEnd={floorW - 3.65}
+          onOpen={() => navigate('triggers')}
+        />
+        <ChannelsRadio
+          channels={state.channels}
+          wallY={floorD}
+          xEnd={floorW - 7.45}
+          onOpen={() => navigate('channels')}
+        />
         {projects.map((project, laneIndex) => (
           <ExitChute key={project.id} wallX={floorW} beltY={laneY(laneIndex) + BELT_LOCAL_Y} />
         ))}

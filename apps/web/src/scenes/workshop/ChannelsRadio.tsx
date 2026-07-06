@@ -3,17 +3,21 @@ import { iso, poly } from '../iso.js';
 import { Workstation } from './Workstation.jsx';
 
 /**
- * Compact comms box mounted high on the back-right wall. Status LED shows
- * Discord health; when connected, a tiny antenna emits faint arcs.
+ * Compact comms box mounted high on the back-left wall (y = wallY), beside
+ * the clock wall and activity plaque. Status LED shows Discord health; when
+ * connected, a tiny antenna emits faint arcs.
  */
 export function ChannelsRadio({
   channels,
-  wallX,
+  wallY,
+  xEnd,
   onOpen,
 }: {
   channels: Channel[];
-  /** Width of the back-right wall (the room's floor width). */
-  wallX: number;
+  /** Depth of the back-left wall (the room's floor depth). */
+  wallY: number;
+  /** Right edge of the box along the wall. */
+  xEnd: number;
   onOpen: () => void;
 }): JSX.Element {
   const discord = channels.find((c) => c.type === 'discord');
@@ -22,15 +26,15 @@ export function ChannelsRadio({
   const ledColor =
     status === 'connected' ? '#5ec27a' : status === 'error' ? '#cf4040' : '#5a5a5a';
 
-  const ys = 1.15;
-  const ye = 3.45;
+  const xs = xEnd - 2.3;
+  const xe = xEnd;
   const zs = 1.55;
   const ze = 2.55;
 
-  const bl = iso(wallX, ys, zs);
-  const br = iso(wallX, ye, zs);
-  const tr = iso(wallX, ye, ze);
-  const tl = iso(wallX, ys, ze);
+  const bl = iso(xs, wallY, zs);
+  const br = iso(xe, wallY, zs);
+  const tr = iso(xe, wallY, ze);
+  const tl = iso(xs, wallY, ze);
 
   return (
     <Workstation label={`Discord channel (${status})`} onActivate={onOpen}>
@@ -38,10 +42,10 @@ export function ChannelsRadio({
       <polygon points={poly(bl, br, tr, tl)} fill="#2b2118" stroke="#1a110a" strokeWidth={1.5} />
       <polygon
         points={poly(
-          iso(wallX, ys + 0.12, zs + 0.12),
-          iso(wallX, ye - 0.12, zs + 0.12),
-          iso(wallX, ye - 0.12, ze - 0.12),
-          iso(wallX, ys + 0.12, ze - 0.12),
+          iso(xs + 0.12, wallY, zs + 0.12),
+          iso(xe - 0.12, wallY, zs + 0.12),
+          iso(xe - 0.12, wallY, ze - 0.12),
+          iso(xs + 0.12, wallY, ze - 0.12),
         )}
         fill="none"
         stroke="#5a3a22"
@@ -50,10 +54,10 @@ export function ChannelsRadio({
 
       {/* Small glass status screen */}
       {(() => {
-        const a = iso(wallX, ys + 0.38, zs + 0.38);
-        const b = iso(wallX, ye - 0.36, zs + 0.38);
-        const c = iso(wallX, ye - 0.36, zs + 0.68);
-        const d = iso(wallX, ys + 0.38, zs + 0.68);
+        const a = iso(xs + 0.38, wallY, zs + 0.38);
+        const b = iso(xe - 0.36, wallY, zs + 0.38);
+        const c = iso(xe - 0.36, wallY, zs + 0.68);
+        const d = iso(xs + 0.38, wallY, zs + 0.68);
         return (
           <polygon
             points={poly(a, b, c, d)}
@@ -66,7 +70,7 @@ export function ChannelsRadio({
 
       {/* Status LED and tuning knobs */}
       {(() => {
-        const c = iso(wallX, ys + 0.42, zs + 0.22);
+        const c = iso(xs + 0.42, wallY, zs + 0.22);
         return (
           <circle
             cx={c.x}
@@ -80,11 +84,11 @@ export function ChannelsRadio({
         );
       })()}
 
-      {[1.05, 1.42].map((yOffset) => {
-        const c = iso(wallX, ys + yOffset, zs + 0.22);
+      {[1.05, 1.42].map((xOffset) => {
+        const c = iso(xs + xOffset, wallY, zs + 0.22);
         return (
           <circle
-            key={yOffset}
+            key={xOffset}
             cx={c.x}
             cy={c.y}
             r={4}
@@ -97,8 +101,8 @@ export function ChannelsRadio({
 
       {/* Short antenna fixed above the box */}
       {(() => {
-        const base = iso(wallX, ys + 1.75, ze);
-        const tip = iso(wallX, ys + 1.75, ze + 0.42);
+        const base = iso(xs + 1.75, wallY, ze);
+        const tip = iso(xs + 1.75, wallY, ze + 0.42);
         return (
           <>
             <line
@@ -133,8 +137,8 @@ export function ChannelsRadio({
       })()}
 
       {(() => {
-        const title = iso(wallX, (ys + ye) / 2, ze - 0.22);
-        const label = iso(wallX, (ys + ye) / 2, zs + 0.53);
+        const title = iso((xs + xe) / 2, wallY, ze - 0.22);
+        const label = iso((xs + xe) / 2, wallY, zs + 0.53);
         return (
           <>
             <text
