@@ -78,13 +78,15 @@ export async function registerPipelineRoutes(
       if (source !== undefined && source !== 'manual' && source !== 'channel') {
         return reply.code(400).send({ error: `invalid source: ${String(source)}` });
       }
-      const item = await runner.enqueue({
-        projectId,
-        request: request.trim(),
-        ...(title !== undefined ? { title } : {}),
-        source: source ?? 'manual',
+      return handleTransition(reply, async () => {
+        const item = await runner.enqueue({
+          projectId,
+          request: request.trim(),
+          ...(title !== undefined ? { title } : {}),
+          source: source ?? 'manual',
+        });
+        return reply.code(202).send(item);
       });
-      return reply.code(202).send(item);
     },
   );
 

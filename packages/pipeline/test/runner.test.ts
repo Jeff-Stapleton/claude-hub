@@ -38,9 +38,17 @@ async function until<T>(fn: () => T | undefined | false, timeoutMs = 5000): Prom
   }
 }
 
-/** Default config with no approval gates and monitor disabled: runs straight through. */
+/**
+ * Config with the four agent stages installed, no approval gates, and
+ * monitor disabled: runs straight through. (Defaults ship all-disabled —
+ * a blank line — so tests must install the machines they exercise.)
+ */
 function openPipeline(overrides?: (config: PipelineConfig) => void): PipelineConfig {
   const config = defaultPipelineConfig(project.id);
+  config.stages.spec.enabled = true;
+  config.stages.code.enabled = true;
+  config.stages.test.enabled = true;
+  config.stages.deploy.enabled = true;
   config.stages.deploy.gate = 'auto';
   config.stages.monitor.enabled = false;
   overrides?.(config);
@@ -89,8 +97,10 @@ describe('PipelineRunner', () => {
   });
 
   it('holds at the default deploy approval gate, then advances on approve', async () => {
-    const config = defaultPipelineConfig(project.id);
-    config.stages.monitor.enabled = false;
+    // Installed stages keep deploy's default approval gate.
+    const config = openPipeline((c) => {
+      c.stages.deploy.gate = 'approval';
+    });
     await store.update('pipelines', [config]);
     mockRun.mockResolvedValue(okResult());
 
@@ -107,6 +117,14 @@ describe('PipelineRunner', () => {
     const archived = await readArchivedWorkItems(store.paths, project.id);
     expect(archived[0]?.status).toBe('done');
     expect(archived[0]?.approvedStages).toEqual(['deploy']);
+  });
+
+  it('rejects enqueue when the line has no enabled stages (blank default)', async () => {
+    // No stored config: the all-disabled defaults apply.
+    await expect(
+      runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' }),
+    ).rejects.toMatchObject({ name: 'WorkItemStateError', code: 'no-enabled-stages' });
+    expect(store.workItems()).toHaveLength(0);
   });
 
   it('rejects approve when the item is not waiting', async () => {
@@ -242,6 +260,9 @@ describe('PipelineRunner', () => {
   });
 
   it('fails the item when the project is missing', async () => {
+    const config = openPipeline();
+    config.projectId = 'nope';
+    await store.update('pipelines', [config]);
     mockRun.mockResolvedValue(okResult());
     const item = await runner.enqueue({ projectId: 'nope', request: 'x', source: 'manual' });
     const failed = await until(() =>
@@ -251,8 +272,9 @@ describe('PipelineRunner', () => {
   });
 
   it('parks the item in monitoring when the monitor stage is enabled', async () => {
-    const config = defaultPipelineConfig(project.id);
-    config.stages.deploy.gate = 'auto';
+    const config = openPipeline((c) => {
+      c.stages.monitor.enabled = true;
+    });
     await store.update('pipelines', [config]);
     mockRun.mockResolvedValue(okResult());
 
@@ -286,6 +308,10 @@ describe('PipelineRunner.runMonitorCheck', () => {
 
   async function seedMonitoring(source: WorkItem['source'] = 'manual', maxChecks = 2): Promise<WorkItem> {
     const config = defaultPipelineConfig(project.id);
+    // Monitor is installed (it's mid-check), spec so a filed defect has an
+    // agent stage to park on.
+    config.stages.spec.enabled = true;
+    config.stages.monitor.enabled = true;
     config.stages.monitor.maxChecks = maxChecks;
     await store.update('pipelines', [config]);
     const item: WorkItem = {

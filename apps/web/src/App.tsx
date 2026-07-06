@@ -1,5 +1,4 @@
 import type { ReactNode } from 'react';
-import { AssemblyLine } from './scenes/AssemblyLine.jsx';
 import { Scene } from './scenes/Scene.jsx';
 import { useSceneRouter } from './scenes/useSceneRouter.js';
 import { Workshop } from './scenes/Workshop.jsx';
@@ -10,15 +9,12 @@ import { TriggersTab } from './tabs/TriggersTab.jsx';
 import { useLiveState } from './useLiveState.js';
 
 /**
- * Phase 1 of the workshop redesign — viewport-locked single-scene shell.
- *
- * The workshop scene itself is still a placeholder (Phase 2 replaces it
- * with the illustrated workstation layout). Sub-screens wrap the existing
- * per-tab components unchanged so we can prove navigation end-to-end
- * without yet touching any mutation logic.
+ * Viewport-locked single-scene shell. The workshop is the one room —
+ * every project's assembly lane lives there. Sub-screens wrap the
+ * existing per-tab components unchanged.
  */
 export function App(): JSX.Element {
-  const { scene, param, navigate } = useSceneRouter();
+  const { scene, navigate } = useSceneRouter();
   const { data, isLoading, error } = useLiveState();
 
   if (isLoading) {
@@ -44,11 +40,8 @@ export function App(): JSX.Element {
   }
 
   return (
-    <Scene sceneKey={scene === 'line' ? `line-${param ?? ''}` : scene}>
+    <Scene sceneKey={scene}>
       {scene === 'workshop' && <Workshop state={data} navigate={navigate} />}
-      {scene === 'line' && (
-        <AssemblyLine state={data} projectId={param ?? ''} navigate={navigate} />
-      )}
       {scene === 'channels' && (
         <SubScreen title="Channels" onBack={() => navigate('workshop')}>
           <ChannelsTab channels={data.channels} />

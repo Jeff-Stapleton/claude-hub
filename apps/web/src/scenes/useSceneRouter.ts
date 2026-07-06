@@ -5,8 +5,7 @@ export type SceneId =
   | 'channels'
   | 'triggers'
   | 'orchestrator'
-  | 'activity'
-  | 'line';
+  | 'activity';
 
 const VALID: ReadonlySet<SceneId> = new Set<SceneId>([
   'workshop',
@@ -14,12 +13,11 @@ const VALID: ReadonlySet<SceneId> = new Set<SceneId>([
   'triggers',
   'orchestrator',
   'activity',
-  'line',
 ]);
 
 interface SceneLocation {
   scene: SceneId;
-  /** Scene parameter — the project id for `line` (hash `#line/<id>`). */
+  /** Optional scene parameter (`#<scene>/<param>`); unused today. */
   param?: string;
 }
 
@@ -27,13 +25,9 @@ function readSceneFromHash(): SceneLocation {
   const raw = window.location.hash.slice(1);
   const slash = raw.indexOf('/');
   const head = slash >= 0 ? raw.slice(0, slash) : raw;
-  const rest = slash >= 0 ? raw.slice(slash + 1) : '';
-  if (head === 'line' && rest) {
-    return { scene: 'line', param: decodeURIComponent(rest) };
-  }
-  return VALID.has(head as SceneId) && head !== 'line'
-    ? { scene: head as SceneId }
-    : { scene: 'workshop' };
+  // Unknown scenes (including retired `#line/<id>` links) fall back to
+  // the workshop — every assembly line lives there now.
+  return VALID.has(head as SceneId) ? { scene: head as SceneId } : { scene: 'workshop' };
 }
 
 /**

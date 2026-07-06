@@ -51,11 +51,13 @@ function fromDraft(stage: PipelineStageId, draft: Draft): StageConfig {
 }
 
 /**
- * The station configuration form, docked in the hall's left screen
- * region. Keyed by stage in the parent so the draft resets when the
- * user clicks a different station.
+ * The stage machine configuration form, docked in the scene's top-left
+ * panel slot. Keyed by project+stage in the parent so the draft resets
+ * when the user clicks a different machine. Unchecking "installed" is
+ * how a machine is removed from the lane.
  */
 export function StationConfigPanel({
+  projectLabel,
   stage,
   config,
   isPending,
@@ -63,6 +65,7 @@ export function StationConfigPanel({
   onSave,
   onClose,
 }: {
+  projectLabel: string;
   stage: PipelineStageId;
   config: StageConfig;
   isPending: boolean;
@@ -86,7 +89,7 @@ export function StationConfigPanel({
       >
         <div style={s.panelTitle}>
           <span>
-            {meta.label} station <span style={s.panelHint}>— {meta.blurb}</span>
+            {projectLabel} · {meta.label} <span style={s.panelHint}>— {meta.blurb}</span>
           </span>
           <button type="button" onClick={onClose} style={closeButton} aria-label="Close panel">
             ✕
@@ -100,7 +103,7 @@ export function StationConfigPanel({
               checked={draft.enabled}
               onChange={(e) => set('enabled', e.target.checked)}
             />
-            enabled
+            installed
           </label>
           <label style={{ ...s.panelRow, fontSize: 12, marginLeft: 12 }}>
             gate

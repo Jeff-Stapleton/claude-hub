@@ -1,5 +1,5 @@
 import type { Channel } from '../../types.js';
-import { FLOOR, iso, poly } from '../iso.js';
+import { iso, poly } from '../iso.js';
 import { Workstation } from './Workstation.jsx';
 
 /**
@@ -8,9 +8,12 @@ import { Workstation } from './Workstation.jsx';
  */
 export function ChannelsRadio({
   channels,
+  wallX,
   onOpen,
 }: {
   channels: Channel[];
+  /** Width of the back-right wall (the room's floor width). */
+  wallX: number;
   onOpen: () => void;
 }): JSX.Element {
   const discord = channels.find((c) => c.type === 'discord');
@@ -19,7 +22,6 @@ export function ChannelsRadio({
   const ledColor =
     status === 'connected' ? '#5ec27a' : status === 'error' ? '#cf4040' : '#5a5a5a';
 
-  const wallX = FLOOR;
   const ys = 1.15;
   const ye = 3.45;
   const zs = 1.55;

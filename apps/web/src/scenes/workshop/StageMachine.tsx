@@ -1,9 +1,9 @@
 import type { PipelineStageId, StageConfig, StageRunStatus } from '../../types.js';
 import { UNIT_Z, iso, isoBoxPoints, poly } from '../iso.js';
-import { Workstation } from '../workshop/Workstation.jsx';
-import { STAGE_META, STATION_D, STATION_W, STATION_Y, stationX } from './layout.js';
+import { SLOT_D, SLOT_W, STAGE_META } from './layout.js';
+import { Workstation } from './Workstation.jsx';
 
-/** Per-stage silhouette: height + palette + topper so each station reads. */
+/** Per-stage silhouette: height + palette + topper so each machine reads. */
 const VARIANTS: Record<
   PipelineStageId,
   { h: number; top: string; right: string; left: string }
@@ -17,36 +17,37 @@ const VARIANTS: Record<
 };
 
 /**
- * One assembly-line station. The whole body is a Workstation hotspot —
- * clicking opens the stage's config panel. Disabled stages render dimmed;
- * the lamp above the screen reflects live stage activity.
+ * One installed stage machine on a project's lane, parameterized by world
+ * position. The whole body is a Workstation hotspot — clicking opens the
+ * stage's config panel. The lamp above the screen reflects live activity.
  */
-export function Station({
+export function StageMachine({
   stage,
+  x,
+  y,
   config,
   activity,
   selected,
   onSelect,
 }: {
   stage: PipelineStageId;
+  x: number;
+  y: number;
   config: StageConfig;
   /** Live status of this stage across the project's work items. */
   activity: StageRunStatus | undefined;
   selected: boolean;
   onSelect: () => void;
 }): JSX.Element {
-  const i = ['intake', 'spec', 'code', 'test', 'deploy', 'monitor'].indexOf(stage);
-  const x = stationX(i);
-  const y = STATION_Y;
   const variant = VARIANTS[stage];
-  const { topFace, rightFace, leftFace } = isoBoxPoints(x, y, STATION_W, STATION_D, variant.h);
+  const { topFace, rightFace, leftFace } = isoBoxPoints(x, y, SLOT_W, SLOT_D, variant.h);
   const meta = STAGE_META[stage];
   const running = activity === 'running';
 
   const screen = {
     a: iso(x + 0.16, y, variant.h * 0.5),
-    b: iso(x + STATION_W - 0.16, y, variant.h * 0.5),
-    c: iso(x + STATION_W - 0.16, y, variant.h * 0.82),
+    b: iso(x + SLOT_W - 0.16, y, variant.h * 0.5),
+    c: iso(x + SLOT_W - 0.16, y, variant.h * 0.82),
     d: iso(x + 0.16, y, variant.h * 0.82),
   };
   const screenFill =
@@ -60,8 +61,8 @@ export function Station({
           ? '#b48ad6'
           : '#5ec27a';
 
-  const lamp = iso(x + STATION_W / 2, y + STATION_D / 2, variant.h + 0.16);
-  const label = iso(x + STATION_W / 2, y + STATION_D / 2, variant.h + 0.5);
+  const lamp = iso(x + SLOT_W / 2, y + SLOT_D / 2, variant.h + 0.16);
+  const label = iso(x + SLOT_W / 2, y + SLOT_D / 2, variant.h + 0.5);
   const lampFill =
     activity === 'running'
       ? '#e8b04a'
@@ -76,7 +77,6 @@ export function Station({
   return (
     <Workstation label={`${meta.label} station — configure`} onActivate={onSelect}>
       <g
-        opacity={config.enabled ? 1 : 0.45}
         style={{
           filter: selected ? 'drop-shadow(0 0 10px rgba(255, 210, 138, 0.9))' : undefined,
         }}
@@ -109,11 +109,7 @@ export function Station({
         <text x={label.x} y={label.y} textAnchor="middle" fontSize={11} fontFamily="monospace" fill="#ead6b8">
           {meta.label}
         </text>
-        {!config.enabled ? (
-          <text x={label.x} y={label.y + 14} textAnchor="middle" fontSize={8} fontFamily="monospace" fill="#8a7458">
-            offline
-          </text>
-        ) : config.gate === 'approval' ? (
+        {config.gate === 'approval' ? (
           <text x={label.x} y={label.y + 14} textAnchor="middle" fontSize={8} fontFamily="monospace" fill="#b48ad6">
             gated
           </text>
@@ -123,10 +119,10 @@ export function Station({
   );
 }
 
-/** Small per-stage decoration so the six stations aren't identical boxes. */
+/** Small per-stage decoration so the six machines aren't identical boxes. */
 function Topper({ stage, x, y, h }: { stage: PipelineStageId; x: number; y: number; h: number }): JSX.Element {
-  const cx = x + STATION_W / 2;
-  const cy = y + STATION_D / 2;
+  const cx = x + SLOT_W / 2;
+  const cy = y + SLOT_D / 2;
   switch (stage) {
     case 'intake': {
       // Hopper: a small open bin on top. isoBoxPoints projects at floor
@@ -144,8 +140,8 @@ function Topper({ stage, x, y, h }: { stage: PipelineStageId; x: number; y: numb
       // Scanner arch over the front edge.
       const a = iso(x + 0.2, y - 0.05, h);
       const b = iso(x + 0.2, y - 0.05, h + 0.35);
-      const c = iso(x + STATION_W - 0.2, y - 0.05, h + 0.35);
-      const d = iso(x + STATION_W - 0.2, y - 0.05, h);
+      const c = iso(x + SLOT_W - 0.2, y - 0.05, h + 0.35);
+      const d = iso(x + SLOT_W - 0.2, y - 0.05, h);
       return (
         <g>
           <polyline
@@ -160,7 +156,7 @@ function Topper({ stage, x, y, h }: { stage: PipelineStageId; x: number; y: numb
     }
     case 'deploy': {
       // Chimney stack.
-      const stack = isoBoxPoints(x + STATION_W - 0.45, cy - 0.15, 0.3, 0.3, 0.45);
+      const stack = isoBoxPoints(x + SLOT_W - 0.45, cy - 0.15, 0.3, 0.3, 0.45);
       return (
         <g transform={`translate(0, ${-h * UNIT_Z})`}>
           <polygon points={poly(...stack.leftFace)} fill="#343038" stroke="#15100c" strokeWidth={0.8} />

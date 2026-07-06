@@ -1,24 +1,51 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api } from '../api.js';
-import type { UIState } from '../types.js';
-import { FLOOR, iso, poly, WALL_H } from './iso.js';
+import type { PipelineStageId, StageConfig, UIState } from '../types.js';
+import { PIPELINE_STAGE_ORDER } from '../types.js';
+import { DepthSorted, iso, poly, WALL_H, type SceneEntity } from './iso.js';
 import type { SceneId } from './useSceneRouter.js';
+import { AddStagePanel } from './workshop/AddStagePanel.jsx';
 import { ChannelsRadio } from './workshop/ChannelsRadio.jsx';
 import { DebugOverlay } from './workshop/DebugOverlay.jsx';
-import { OrchestratorConsole } from './workshop/OrchestratorConsole.jsx';
-import { ProjectMachines } from './workshop/ProjectMachines.jsx';
+import { ExitChute } from './workshop/ExitChute.jsx';
+import {
+  BELT_LOCAL_Y,
+  FLOOR_W,
+  defaultPipeline,
+  floorDepth,
+  laneY,
+  sceneTransform,
+} from './workshop/layout.js';
+import { CONSOLE_X, CONSOLE_Y, OrchestratorConsole } from './workshop/OrchestratorConsole.jsx';
+import { ProjectLane } from './workshop/ProjectLane.jsx';
+import { RequestIntakeForm } from './workshop/RequestIntakeForm.jsx';
+import { StationConfigPanel } from './workshop/StationConfigPanel.jsx';
 import { TimeCardWall } from './workshop/TimeCardWall.jsx';
+import { WorkItemPanel } from './workshop/WorkItemPanel.jsx';
+import { WorkRequestTunnel } from './workshop/WorkRequestTunnel.jsx';
 
 /**
- * Workshop home scene. The 16:9 stage hosts a true-isometric room with
- * a rhombus floor and two visible walls (back-left along y=FLOOR,
- * back-right along x=FLOOR), as if the front-left and front-right walls
- * were cut away so the viewer can see inside.
+ * Workshop home scene — the hub's one and only room. Every project owns a
+ * full assembly lane (head machine, belt, installed stage machines, live
+ * work items) stacked front-to-back; the floor deepens as projects are
+ * added and the whole scene scales down to keep everything visible at a
+ * glance inside the fixed 1600×900 stage.
  *
- * Paint order is strict back-to-front so closer workstations occlude
- * farther ones cleanly.
+ * Z-order convention (see .cursor rules): iso() maps larger x+y farther
+ * back, so floor-standing objects are routed through DepthSorted and
+ * paint back-to-front — the object nearest world (0,0) paints last.
+ * Walls/floor/wall-mounts paint before the sorted group; screen-space
+ * panels after it.
  */
+
+type WorkshopSelection =
+  | { kind: 'stage'; projectId: string; stage: PipelineStageId }
+  | { kind: 'item'; itemId: string }
+  | { kind: 'intake'; projectId: string }
+  | { kind: 'addStage'; projectId: string }
+  | null;
+
 export function Workshop({
   state,
   navigate,
@@ -29,6 +56,7 @@ export function Workshop({
   const qc = useQueryClient();
   const [path, setPath] = useState('');
   const [alias, setAlias] = useState('');
+  const [selection, setSelection] = useState<WorkshopSelection>(null);
 
   const activityQuery = useQuery({
     queryKey: ['activity'],
@@ -50,12 +78,103 @@ export function Workshop({
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
   });
 
+  const saveMutation = useMutation({
+    mutationFn: ({
+      projectId,
+      stages,
+    }: {
+      projectId: string;
+      stages: Record<PipelineStageId, StageConfig>;
+    }) => api.savePipeline(projectId, { stages }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
+
+  const createMutation = useMutation({
+    mutationFn: ({ projectId, body }: { projectId: string; body: { request: string; title?: string } }) =>
+      api.createWorkItem(projectId, body),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
+
+  const actionMutation = useMutation({
+    mutationFn: ({ id, action }: { id: string; action: 'approve' | 'retry' | 'cancel' }) =>
+      action === 'approve'
+        ? api.approveWorkItem(id)
+        : action === 'retry'
+          ? api.retryWorkItem(id)
+          : api.cancelWorkItem(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
+
   const activity = activityQuery.data ?? [];
+  const projects = state.projects;
+  const workItems = state.workItems ?? [];
+
+  const floorW = FLOOR_W;
+  const floorD = floorDepth(projects.length);
+  const { s: sceneScale, tx, ty } = sceneTransform(floorW, floorD);
+
+  // Recent trigger runs per project, for each lane's head-machine screen.
+  const triggerProjectById = new Map(state.triggers.map((t) => [t.id, t.projectId]));
+  const activityByProject = new Map<string, typeof activity>();
+  for (const entry of activity) {
+    const projectId = triggerProjectById.get(entry.run.triggerId);
+    if (!projectId) continue;
+    const entries = activityByProject.get(projectId) ?? [];
+    if (entries.length < 3) {
+      entries.push(entry);
+      activityByProject.set(projectId, entries);
+    }
+  }
+
+  const configFor = (projectId: string) =>
+    state.pipelines?.find((p) => p.projectId === projectId) ?? defaultPipeline(projectId);
+  const labelFor = (projectId: string): string => {
+    const project = projects.find((p) => p.id === projectId);
+    return project ? project.alias ?? basename(project.path) : projectId;
+  };
+  const toggle = (next: Exclude<WorkshopSelection, null>): void =>
+    setSelection((current) => (JSON.stringify(current) === JSON.stringify(next) ? null : next));
+
+  // A WS push can delete the selected project/item underneath the panel —
+  // render from a validated view of the selection so the panel just closes.
+  const selected = validateSelection(selection, state);
+
   const nothingConfigured =
-    state.projects.length === 0 &&
+    projects.length === 0 &&
     state.triggers.length === 0 &&
     state.channels.length === 0 &&
     Object.keys(state.orchestrator.channelSessions).length === 0;
+
+  // Floor-standing objects, depth-sorted back-to-front: each lane is one
+  // entity (lanes occupy disjoint y bands), the console sits in the apron.
+  const entities: SceneEntity[] = projects.map((project, laneIndex) => ({
+    key: `lane-${project.id}`,
+    anchor: { x: 0.4, y: laneY(laneIndex) },
+    node: (
+      <ProjectLane
+        project={project}
+        laneIndex={laneIndex}
+        config={configFor(project.id)}
+        items={workItems.filter((item) => item.projectId === project.id)}
+        triggerActivity={activityByProject.get(project.id) ?? []}
+        selectedStage={
+          selected?.kind === 'stage' && selected.projectId === project.id ? selected.stage : null
+        }
+        selectedItemId={selected?.kind === 'item' ? selected.itemId : null}
+        removing={deleteMutation.isPending && String(deleteMutation.variables ?? '') === project.id}
+        onSelectStage={(stage) => toggle({ kind: 'stage', projectId: project.id, stage })}
+        onSelectItem={(itemId) => toggle({ kind: 'item', itemId })}
+        onOpenIntake={() => toggle({ kind: 'intake', projectId: project.id })}
+        onOpenAddStage={() => toggle({ kind: 'addStage', projectId: project.id })}
+        onRemove={() => deleteMutation.mutate(project.id)}
+      />
+    ),
+  }));
+  entities.push({
+    key: 'orchestrator',
+    anchor: { x: CONSOLE_X, y: CONSOLE_Y },
+    node: <OrchestratorConsole state={state.orchestrator} onOpen={() => navigate('orchestrator')} />,
+  });
 
   return (
     <svg
@@ -78,28 +197,93 @@ export function Workshop({
         </linearGradient>
       </defs>
 
-      {/* Room background: walls drawn first (farthest), then floor on top. */}
-      <Walls />
-      <Floor />
+      {/* Everything world-anchored lives in the scale-to-fit wrapper. */}
+      <g transform={`translate(${tx} ${ty}) scale(${sceneScale})`}>
+        {/* Room background: walls first (farthest), then floor on top. */}
+        <Walls floorW={floorW} floorD={floorD} />
+        <Floor floorW={floorW} floorD={floorD} />
 
-      {/* Wall-mounted workstations (sit on the back walls). */}
-      <TimeCardWall activity={activity} onOpen={() => navigate('activity')} />
-      <ChannelsRadio channels={state.channels} onOpen={() => navigate('channels')} />
+        {/* Wall-mounted fixtures (flat on the back walls). */}
+        <TimeCardWall
+          activity={activity}
+          wallY={floorD}
+          xEnd={floorW - 0.7}
+          onOpen={() => navigate('activity')}
+        />
+        <ChannelsRadio channels={state.channels} wallX={floorW} onOpen={() => navigate('channels')} />
+        <WorkRequestTunnel wallX={floorW} y={floorD - 1.4} onOpen={() => navigate('triggers')} />
+        {projects.map((project, laneIndex) => (
+          <ExitChute key={project.id} wallX={floorW} beltY={laneY(laneIndex) + BELT_LOCAL_Y} />
+        ))}
 
-      {/* Floor workstations in back-to-front paint order. Back-most first. */}
-      <ProjectMachines
-        projects={state.projects}
-        triggers={state.triggers}
-        activity={activity}
-        workItems={state.workItems ?? []}
-        onOpenTriggers={() => navigate('triggers')}
-        onOpenLine={(projectId) => navigate('line', projectId)}
-        onRemove={(projectId) => deleteMutation.mutate(projectId)}
-        removingProjectId={
-          deleteMutation.isPending ? String(deleteMutation.variables ?? '') : undefined
-        }
-      />
-      <OrchestratorConsole state={state.orchestrator} onOpen={() => navigate('orchestrator')} />
+        {/* Floor-standing objects in enforced back-to-front paint order. */}
+        <DepthSorted entities={entities} />
+
+        {projects.length === 0 ? (
+          <EmptyFloorHint floorW={floorW} floorD={floorD} />
+        ) : null}
+
+        {import.meta.env.DEV ? <DebugOverlay floorW={floorW} floorD={floorD} /> : null}
+      </g>
+
+      {/* Screen-space panels, outside the scale wrapper. */}
+      {selected?.kind === 'stage' ? (
+        <StationConfigPanel
+          key={`${selected.projectId}:${selected.stage}`}
+          projectLabel={labelFor(selected.projectId)}
+          stage={selected.stage}
+          config={configFor(selected.projectId).stages[selected.stage]}
+          isPending={saveMutation.isPending}
+          error={saveMutation.error}
+          onSave={(next) =>
+            saveMutation.mutate({
+              projectId: selected.projectId,
+              stages: { ...configFor(selected.projectId).stages, [selected.stage]: next },
+            })
+          }
+          onClose={() => setSelection(null)}
+        />
+      ) : null}
+      {selected?.kind === 'item' && selected.item ? (
+        <WorkItemPanel
+          item={selected.item}
+          isPending={actionMutation.isPending}
+          error={actionMutation.error}
+          onApprove={() => actionMutation.mutate({ id: selected.item.id, action: 'approve' })}
+          onRetry={() => actionMutation.mutate({ id: selected.item.id, action: 'retry' })}
+          onCancel={() => actionMutation.mutate({ id: selected.item.id, action: 'cancel' })}
+          onClose={() => setSelection(null)}
+        />
+      ) : null}
+      {selected?.kind === 'intake' ? (
+        <RequestIntakeForm
+          key={selected.projectId}
+          projectLabel={labelFor(selected.projectId)}
+          noMachines={PIPELINE_STAGE_ORDER.every(
+            (stage) => !configFor(selected.projectId).stages[stage].enabled,
+          )}
+          isPending={createMutation.isPending}
+          error={createMutation.error}
+          onSubmit={(body) => createMutation.mutate({ projectId: selected.projectId, body })}
+          onClose={() => setSelection(null)}
+        />
+      ) : null}
+      {selected?.kind === 'addStage' ? (
+        <AddStagePanel
+          projectLabel={labelFor(selected.projectId)}
+          config={configFor(selected.projectId)}
+          isPending={saveMutation.isPending}
+          error={saveMutation.error}
+          onInstall={(stage) => {
+            const stages = configFor(selected.projectId).stages;
+            saveMutation.mutate({
+              projectId: selected.projectId,
+              stages: { ...stages, [stage]: { ...stages[stage], enabled: true } },
+            });
+          }}
+          onClose={() => setSelection(null)}
+        />
+      ) : null}
 
       <ProjectAddPanel
         path={path}
@@ -133,9 +317,40 @@ export function Workshop({
           click any workstation to begin
         </text>
       ) : null}
-
-      {import.meta.env.DEV ? <DebugOverlay /> : null}
     </svg>
+  );
+}
+
+type ValidatedSelection =
+  | { kind: 'stage'; projectId: string; stage: PipelineStageId }
+  | { kind: 'item'; itemId: string; item: NonNullable<UIState['workItems']>[number] }
+  | { kind: 'intake'; projectId: string }
+  | { kind: 'addStage'; projectId: string }
+  | null;
+
+function validateSelection(selection: WorkshopSelection, state: UIState): ValidatedSelection {
+  if (!selection) return null;
+  if (selection.kind === 'item') {
+    const item = (state.workItems ?? []).find((it) => it.id === selection.itemId);
+    return item ? { ...selection, item } : null;
+  }
+  return state.projects.some((p) => p.id === selection.projectId) ? selection : null;
+}
+
+function EmptyFloorHint({ floorW, floorD }: { floorW: number; floorD: number }): JSX.Element {
+  const c = iso(floorW / 2, floorD / 2, 0.35);
+  return (
+    <text
+      x={c.x}
+      y={c.y}
+      textAnchor="middle"
+      fontSize={13}
+      fill="#c8a888"
+      opacity={0.7}
+      fontStyle="italic"
+    >
+      add a project to build its assembly line
+    </text>
   );
 }
 
@@ -187,22 +402,24 @@ function ProjectAddPanel({
   );
 }
 
-/** Floor rhombus + faint tile grid. */
-function Floor(): JSX.Element {
+/** Floor rhombus + faint tile grid, sized to the current room. */
+function Floor({ floorW, floorD }: { floorW: number; floorD: number }): JSX.Element {
   // Floor corners in world coords: F=front, R=back-right, B=back, L=back-left
   const F = iso(0, 0, 0);
-  const R = iso(FLOOR, 0, 0);
-  const B = iso(FLOOR, FLOOR, 0);
-  const L = iso(0, FLOOR, 0);
+  const R = iso(floorW, 0, 0);
+  const B = iso(floorW, floorD, 0);
+  const L = iso(0, floorD, 0);
 
   // Tile grid lines, 1 world unit apart. Drawn faintly so they suggest
   // floorboards or tiles without dominating.
   const lines: Array<{ a: ReturnType<typeof iso>; b: ReturnType<typeof iso> }> = [];
-  for (let i = 1; i < FLOOR; i++) {
+  for (let i = 1; i < floorD; i++) {
     // Lines parallel to the +X axis (constant Y)
-    lines.push({ a: iso(0, i, 0), b: iso(FLOOR, i, 0) });
+    lines.push({ a: iso(0, i, 0), b: iso(floorW, i, 0) });
+  }
+  for (let i = 1; i < floorW; i++) {
     // Lines parallel to the +Y axis (constant X)
-    lines.push({ a: iso(i, 0, 0), b: iso(i, FLOOR, 0) });
+    lines.push({ a: iso(i, 0, 0), b: iso(i, floorD, 0) });
   }
 
   return (
@@ -224,19 +441,19 @@ function Floor(): JSX.Element {
   );
 }
 
-/** Back-left wall (y=FLOOR) and back-right wall (x=FLOOR). */
-function Walls(): JSX.Element {
+/** Back-left wall (y=floorD) and back-right wall (x=floorW). */
+function Walls({ floorW, floorD }: { floorW: number; floorD: number }): JSX.Element {
   // Back-left wall: from back-corner to back-left corner, rising WALL_H.
-  const bl0 = iso(FLOOR, FLOOR, 0);
-  const bl1 = iso(0, FLOOR, 0);
-  const bl2 = iso(0, FLOOR, WALL_H);
-  const bl3 = iso(FLOOR, FLOOR, WALL_H);
+  const bl0 = iso(floorW, floorD, 0);
+  const bl1 = iso(0, floorD, 0);
+  const bl2 = iso(0, floorD, WALL_H);
+  const bl3 = iso(floorW, floorD, WALL_H);
 
   // Back-right wall: from back-corner to back-right corner, rising WALL_H.
-  const br0 = iso(FLOOR, FLOOR, 0);
-  const br1 = iso(FLOOR, 0, 0);
-  const br2 = iso(FLOOR, 0, WALL_H);
-  const br3 = iso(FLOOR, FLOOR, WALL_H);
+  const br0 = iso(floorW, floorD, 0);
+  const br1 = iso(floorW, 0, 0);
+  const br2 = iso(floorW, 0, WALL_H);
+  const br3 = iso(floorW, floorD, WALL_H);
 
   return (
     <g>
@@ -244,8 +461,8 @@ function Walls(): JSX.Element {
       <polygon points={poly(bl0, bl1, bl2, bl3)} fill="#1f1610" stroke="#0e0a06" strokeWidth={1.5} />
       {/* Plank lines on back-left wall */}
       {[1, 2].map((z) => {
-        const a = iso(0, FLOOR, z);
-        const b = iso(FLOOR, FLOOR, z);
+        const a = iso(0, floorD, z);
+        const b = iso(floorW, floorD, z);
         return <line key={`bl-${z}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#0e0a06" strokeWidth={1} opacity={0.7} />;
       })}
 
@@ -253,19 +470,25 @@ function Walls(): JSX.Element {
       <polygon points={poly(br0, br1, br2, br3)} fill="#2a1d14" stroke="#0e0a06" strokeWidth={1.5} />
       {/* Plank lines on back-right wall */}
       {[1, 2].map((z) => {
-        const a = iso(FLOOR, 0, z);
-        const b = iso(FLOOR, FLOOR, z);
+        const a = iso(floorW, 0, z);
+        const b = iso(floorW, floorD, z);
         return <line key={`br-${z}`} x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#0e0a06" strokeWidth={1} opacity={0.7} />;
       })}
 
       {/* Corner seam where the two walls meet, slightly darker */}
       {(() => {
-        const a = iso(FLOOR, FLOOR, 0);
-        const b = iso(FLOOR, FLOOR, WALL_H);
+        const a = iso(floorW, floorD, 0);
+        const b = iso(floorW, floorD, WALL_H);
         return <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke="#0a0805" strokeWidth={2} />;
       })()}
     </g>
   );
+}
+
+function basename(path: string): string {
+  const norm = path.replace(/[\\/]+$/, '');
+  const idx = Math.max(norm.lastIndexOf('/'), norm.lastIndexOf('\\'));
+  return idx >= 0 ? norm.slice(idx + 1) : norm;
 }
 
 const addPanel: React.CSSProperties = {

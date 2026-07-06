@@ -3,13 +3,15 @@ import { iso, isoBoxPoints, poly } from '../iso.js';
 import { Workstation } from './Workstation.jsx';
 
 /**
- * Front-left of the floor: an industrial-green machine with a glowing
- * screen on the front-right face. Screen color reflects orchestrator
- * status; an ACTIVE indicator blinks while channelSessions is non-empty.
- *
- * The room center is reserved for project machines, so this console sits
- * where the old projects bench used to live.
+ * Front apron of the floor (in front of the project lanes): an
+ * industrial-green machine with a glowing screen on the front-right face.
+ * Screen color reflects orchestrator status; an ACTIVE indicator blinks
+ * while channelSessions is non-empty.
  */
+/** Front-corner anchor, exported for the scene's depth sort. */
+export const CONSOLE_X = 1.1;
+export const CONSOLE_Y = 0.45;
+
 export function OrchestratorConsole({
   state,
   onOpen,
@@ -21,8 +23,8 @@ export function OrchestratorConsole({
   const error = state.status === 'error';
   const sessionsActive = Object.keys(state.channelSessions).length > 0;
 
-  const bx = 1.1;
-  const by = 1.45;
+  const bx = CONSOLE_X;
+  const by = CONSOLE_Y;
   const bw = 1.8;
   const bd = 1.45;
   const bh = 1.9;

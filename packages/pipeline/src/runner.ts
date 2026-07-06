@@ -35,7 +35,7 @@ export interface PipelineRunnerEvents {
 export class WorkItemStateError extends Error {
   constructor(
     message: string,
-    readonly code: 'not-found' | 'wrong-state',
+    readonly code: 'not-found' | 'wrong-state' | 'no-enabled-stages',
   ) {
     super(message);
     this.name = 'WorkItemStateError';
@@ -66,6 +66,17 @@ export class PipelineRunner extends EventEmitter {
   }
 
   async enqueue(input: EnqueueWorkItemInput): Promise<WorkItem> {
+    // A blank line (no machines installed) would run every stage as skipped
+    // and archive the item as done having done nothing — reject instead so
+    // webhook/cron/channel intakes fail visibly.
+    const config = effectivePipelineConfig(this.store, input.projectId);
+    if (PIPELINE_STAGE_ORDER.every((stage) => !config.stages[stage].enabled)) {
+      throw new WorkItemStateError(
+        `project ${input.projectId} has no enabled pipeline stages; add a machine to its assembly line first`,
+        'no-enabled-stages',
+      );
+    }
+
     const now = new Date().toISOString();
     const stages = {} as Record<PipelineStageId, StageResult>;
     for (const stage of PIPELINE_STAGE_ORDER) stages[stage] = { status: 'pending' };

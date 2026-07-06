@@ -1,30 +1,34 @@
 import type { WorkItem } from '../../types.js';
 import { iso, isoBoxPoints, poly } from '../iso.js';
-import { Workstation } from '../workshop/Workstation.jsx';
 import { itemSlot } from './layout.js';
+import { Workstation } from './Workstation.jsx';
 
 const BOX_W = 0.3;
 const BOX_D = 0.26;
 const BOX_H = 0.26;
 
 /**
- * A work item on the belt. The box geometry is drawn once at the world
- * origin and positioned with a screen-space translate — exact because
- * iso() is linear — so a CSS transition makes it glide between slots
- * whenever a WS push moves the item's stage/status.
+ * A work item on a lane's belt. The box geometry is drawn once at the
+ * world origin and positioned with a screen-space translate — exact
+ * because iso() is linear — so a CSS transition makes it glide between
+ * slots whenever a WS push moves the item's stage/status. The translate
+ * lives inside the scene's uniform scale wrapper, so it scales exactly.
  */
-export function WorkItemBox({
+export function LaneWorkItemBox({
   item,
+  laneOriginY,
   selected,
   onSelect,
 }: {
   item: WorkItem;
+  /** World y of the lane band's front edge (laneY(k)). */
+  laneOriginY: number;
   selected: boolean;
   onSelect: () => void;
 }): JSX.Element {
   const slot = itemSlot(item);
   const origin = iso(0, 0, 0);
-  const target = iso(slot.x, slot.y, slot.z);
+  const target = iso(slot.x, laneOriginY + slot.y, slot.z);
   const dx = target.x - origin.x;
   const dy = target.y - origin.y;
 

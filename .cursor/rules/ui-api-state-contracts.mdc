@@ -16,3 +16,11 @@ The server owns persisted state and publishes a redacted `UIState` to the browse
 - UI mutations should invalidate `['state']` after success unless they directly update the cache with a complete `UIState`.
 - New API routes should validate inputs, route persistent changes through `Store.update`, and preserve the loopback-only local trust model.
 - Keep route handlers thin. Shared business logic belongs in packages or feature-local helpers.
+
+## Isometric scene z-order
+
+`iso(x, y, z)` in `apps/web/src/scenes/iso.ts` maps larger world `x + y` higher on screen, i.e. farther back. Paint order (SVG document order) must therefore be back-to-front: **descending `x + y`, with the object at world (0,0) painted last (front-most)**. Reversing this is a recurring bug — never hand-order floor-standing SVG elements.
+
+- Route every floor-standing object through `depthSort` / `DepthSorted` in `apps/web/src/scenes/iso.ts`. An entity's `anchor` is the front corner (min x, min y) of its footprint; tiebreakers are `layer` asc → `x + y` desc → `z` asc → `key`.
+- Fixed paint sequence around the sorted group: walls and floor first, then flat wall-mounted plaques (they never occlude floor objects), then the depth-sorted floor objects, then screen-space overlays (foreignObject panels, glow rects, debug grid) last.
+- Groups that sort independently of each other (e.g. per-lane `DepthSorted` inside a scene-level `DepthSorted`) must occupy disjoint floor bands, or their members can interleave incorrectly.

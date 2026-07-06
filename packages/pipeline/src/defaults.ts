@@ -11,8 +11,10 @@ import type {
  * PipelineConfig gets exactly this; a stored config is merged over it per
  * stage so additive fields stay populated.
  *
- * Gate philosophy: the agentic stages (spec/code/test) run unattended, but
- * deploy defaults to a human approval gate until the user loosens it.
+ * A new line starts BLANK: every stage disabled until the user installs its
+ * machine in the workshop UI. Per-stage settings still carry sensible values
+ * (deploy gates on human approval, monitor has a cadence) so enabling a
+ * stage inherits them.
  */
 
 export const DEFAULT_MONITOR_INTERVAL_MINUTES = 30;
@@ -68,7 +70,7 @@ function stage(overrides: Partial<StageConfig> & { enabled: boolean }): StageCon
 
 export function defaultPipelineConfig(projectId: string): PipelineConfig {
   const monitor: MonitorStageConfig = {
-    ...stage({ enabled: true }),
+    ...stage({ enabled: false }),
     intervalMinutes: DEFAULT_MONITOR_INTERVAL_MINUTES,
     maxChecks: DEFAULT_MONITOR_MAX_CHECKS,
   };
@@ -76,10 +78,10 @@ export function defaultPipelineConfig(projectId: string): PipelineConfig {
     projectId,
     stages: {
       intake: stage({ enabled: false }),
-      spec: stage({ enabled: true }),
-      code: stage({ enabled: true }),
-      test: stage({ enabled: true }),
-      deploy: stage({ enabled: true, gate: 'approval' }),
+      spec: stage({ enabled: false }),
+      code: stage({ enabled: false }),
+      test: stage({ enabled: false }),
+      deploy: stage({ enabled: false, gate: 'approval' }),
       monitor,
     },
     updatedAt: new Date(0).toISOString(),

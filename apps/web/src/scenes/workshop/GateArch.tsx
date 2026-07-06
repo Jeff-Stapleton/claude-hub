@@ -1,14 +1,21 @@
 import { iso, poly } from '../iso.js';
-import { BELT_D, BELT_Y, gateX } from './layout.js';
+import { BELT_D } from './layout.js';
 
 /**
- * Approval gate: two posts and a crossbar spanning the belt just before
- * the stage it guards. Glows purple while an item is parked at it.
+ * Approval gate: two posts and a crossbar spanning a lane's belt just
+ * before the stage it guards. Glows purple while an item is parked at it.
  */
-export function GateArch({ stageIndex, held }: { stageIndex: number; held: boolean }): JSX.Element {
-  const x = gateX(stageIndex);
-  const y0 = BELT_Y - 0.12;
-  const y1 = BELT_Y + BELT_D + 0.12;
+export function GateArch({
+  x,
+  beltY,
+  held,
+}: {
+  x: number;
+  beltY: number;
+  held: boolean;
+}): JSX.Element {
+  const y0 = beltY - 0.12;
+  const y1 = beltY + BELT_D + 0.12;
   const barZ = 0.85;
 
   const postA0 = iso(x, y0, 0);

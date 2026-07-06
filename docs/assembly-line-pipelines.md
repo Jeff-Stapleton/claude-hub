@@ -4,6 +4,15 @@
 > feature; intended for humans and future agents extending it. The binding conventions live in
 > `.cursor/rules/*.mdc` — this doc explains this feature's design, the reasoning behind it, and
 > exactly where everything lives.
+>
+> **Revised 2026-07-06** (per Jeff's review): (1) the separate per-project `#line/<id>` scene is
+> gone — every project's lane now lives in the single workshop scene, which auto-scales to fit;
+> (2) floor-standing paint order is enforced by a shared `depthSort` helper (see the z-order
+> section in `.cursor/rules/ui-api-state-contracts.mdc`); (3) lines start **blank** — all six
+> stages default to `enabled: false`, machines are installed one at a time via the lane's "+"
+> slot, and enqueueing onto a line with zero enabled stages is rejected with HTTP 409
+> (`no-enabled-stages`). Sections below have been updated where they state current behavior; the
+> build-log narrative still describes the original 2026-07-05 milestone.
 
 ## What this is
 
@@ -19,17 +28,20 @@ a request arrives (UI form, webhook, cron, or Discord), gets planned, implemente
 deployed, and then watched in production; a failed production check automatically files a defect
 work item back at the top of the line.
 
-In the isometric workshop UI, clicking a project machine opens its **assembly hall**
-(`#line/<projectId>`): six stations along one belt, work items gliding between them, approval
-gates as arches over the belt, and docked panels to configure stations / feed the line / approve
-held items.
+In the isometric workshop UI every project owns a visible **assembly lane** in the one workshop
+scene: head machine, belt, the installed stage machines, work items gliding between them,
+approval gates as arches over the belt, and a "+" ghost slot for installing the next machine.
+Clicking a machine/item/slot docks the matching panel (station config / work item / intake form /
+add-machine picker) in the scene's top-left. The floor deepens one lane per project and the whole
+scene scales down to keep everything visible at a glance.
 
 ### Product decisions (agreed with Jeff before implementation)
 
 | Decision | Choice |
 |---|---|
 | Stage model | Fixed six stages, no reordering or custom stages; each stage toggleable on/off per project |
-| Autonomy | Per-stage gate: `auto` or `approval`. Defaults: spec/code/test auto, **deploy requires approval**, monitor auto |
+| Initial state | **Blank line** (since 2026-07-06): all six stages default `enabled: false`; the user installs machines one at a time via the lane's "+" slot (any remaining stage, picker) |
+| Autonomy | Per-stage gate: `auto` or `approval`. Gate defaults: spec/code/test auto, **deploy requires approval**, monitor auto — inherited when a machine is installed |
 | Scope | Full engine (real execution of all six stages) + full UI in one milestone |
 | Intake | All sources: manual UI form, webhooks, cron (via trigger `mode: 'enqueue'`), Discord/orchestrator (via hub-mcp tool) |
 
@@ -125,7 +137,7 @@ Key behaviors and the reasoning behind them:
 
 | Source | Path | Notes |
 |---|---|---|
-| Manual UI | `POST /api/projects/:id/work-items` | The hall's "New work request" form |
+| Manual UI | `POST /api/projects/:id/work-items` | The lane's "New work request" form (click the head machine) |
 | Cron / webhook | Trigger with `mode: 'enqueue'` | `TriggerRunner` calls an **`enqueueWorkItem` callback** injected in `apps/server/src/main.ts` — a callback, not a package dependency, to avoid a `triggers → pipeline` cycle. The rendered prompt becomes the request; the trigger's history records `enqueued work item <id>` |
 | Discord / orchestrator | hub-mcp tool `enqueue_work_request` | Zero orchestrator changes: the orchestrated agent already has hub-mcp tools, and the tool POSTs to the REST API (`source: 'channel'`), preserving "the hub is the single writer". Also added: `list_work_items`, `approve_work_item` |
 | Monitor defects | internal `runner.enqueue(source: 'monitor')` | Loop-guarded as above |
@@ -138,12 +150,18 @@ New routes in `src/routes/pipeline.ts` (thin handlers; logic in the package):
 GET  /api/projects/:id/pipeline          effective (defaults-merged) config
 PUT  /api/projects/:id/pipeline          full-config upsert; validates the six fixed stage keys,
                                          gate enum, commands only on test/deploy/monitor
-POST /api/projects/:id/work-items        {request, title?, source? ('manual'|'channel')} → 202
+POST /api/projects/:id/work-items        {request, title?, source? ('manual'|'channel')} → 202;
+                                         409 when the line has zero enabled stages
 GET  /api/projects/:id/work-items        live items; ?includeDone=true appends archived tail
 GET  /api/work-items/:id                 item + its JSONL stage records
 POST /api/work-items/:id/approve|retry|cancel   404 unknown / 409 wrong state
                                          (via WorkItemStateError codes)
 ```
+
+Enqueue onto a blank line is rejected at `PipelineRunner.enqueue()` itself (`WorkItemStateError`
+code `no-enabled-stages`), so *every* intake path fails loudly: the REST route maps it to 409,
+enqueue-mode triggers record the rejection in their run history, and the hub-mcp tool surfaces
+the API error to the channel.
 
 `UIState` (`src/state.ts`) gained top-level `pipelines` (effective config per registered project)
 and `workItems` (live items with the `sessions` field stripped — resume bookkeeping the UI never
@@ -155,46 +173,51 @@ out to clients.
 bridge into `TriggerRunner`, then `await pipelineRunner.recover()` and `monitorScheduler.start()`
 before serving; `monitorScheduler.stop()` joins the shutdown path.
 
-### Frontend (`apps/web`)
+### Frontend (`apps/web`) — one singular workshop scene (revised 2026-07-06)
 
-Layout decision: **hybrid**. The main workshop can't legibly fit a six-station line per project
-(stations would be <20 px), so each machine stays compact and clicking it opens a dedicated
-per-project scene. A 6-LED `StageLightsStrip` on each machine's front face gives at-a-glance
-line status from the main room.
+Layout decision (revised): **one room**. The original milestone shipped a hybrid (compact
+machines in the workshop + a separate `#line/<id>` hall per project); Jeff wanted everything at
+a glance, so the hall was merged back in. Each project owns a full-width **lane** stacked along
++Y (lane 0 front-most); the floor's depth grows with the project count and the whole
+world-anchored scene sits in one `translate(tx ty) scale(s)` wrapper computed by
+`sceneTransform()` — exact because `iso()` is linear.
 
-- **Routing** (`scenes/useSceneRouter.ts`): `SceneId` gained `'line'`; the hash parses as
-  `#line/<encodedProjectId>` and the hook now returns `{ scene, param, navigate(next, param?) }`.
-  Still hash-based (no clash with `/api` or `/triggers/webhooks/*`).
-- **`scenes/AssemblyLine.tsx`** — scene root. Draws its own 14×5-world-unit hall (adapted
-  wall/floor styling from `Workshop.tsx`) inside `<g transform="translate(-40, 30)">` to center
-  it in the 1600×900 stage. Owns `selectedStage` / `selectedItemId` state (mutually exclusive)
-  and all mutations. Guards against the project being deleted underneath it (a WS push can remove
-  it while the scene is open) with a "this machine was dismantled" fallback.
-- **`scenes/line/layout.ts`** — all world-coordinate math as pure functions (`stationX(i)`,
-  `gateX(i)`, `itemSlot(item)`) plus `defaultPipeline()` mirroring the server defaults so the
-  scene renders before state arrives. Unit-tested (`test/line-layout.test.ts`); notably
-  `itemSlot` clamps to the belt because the stage-0 gate slot fell off the belt's left edge —
-  the test caught it.
-- **Geometry/animation approach**: everything reuses `scenes/iso.ts` (`iso()`, `isoBoxPoints()`).
-  `WorkItemBox` exploits the fact that `iso()` is **linear**: the box is drawn once at world
-  origin and positioned by a screen-space `translate(dx, dy)` with
-  `transition: transform 700ms` — when a WS push changes an item's stage/status, React re-renders
-  a new translate and the box *glides* along the belt. No rAF anywhere; all looping animations
-  are the existing CSS keyframes in `index.html` (plus one new `line-belt-scroll`), and looping
-  animations live on an **inner** `<g>` so they never clobber the positioning transform. The
-  existing `prefers-reduced-motion` universal override collapses all of it.
-- **Panels are in-scene `foreignObject` HTML** (ProjectAddPanel pattern), docked in the empty
-  screen-left region, *outside* the scene's translate wrapper: `StationConfigPanel` (per-stage
-  form: enabled, gate, provider, prompt template, commands one-per-line for test/deploy/monitor,
-  monitor cadence — keyed by stage so drafts reset on station change; saves via read-modify-write
-  `PUT` of the full stages record), `WorkItemPanel` (stage timeline dots, latest output/error,
-  Approve/Retry/Cancel), `RequestIntakeForm` (always visible), and a `HelpCard` when nothing is
-  selected.
-- **Workshop integration** (`scenes/workshop/ProjectMachines.tsx`): the machine body became a
-  `Workstation` hotspot navigating to `line/<id>` (the nested `RemoveButton` already
-  `stopPropagation`s), and gained the `StageLightsStrip`. `types.ts` mirrors the canonical shapes
-  with `pipelines?`/`workItems?` **optional** on `UIState` so payloads from a pre-pipeline server
-  still render during rolling local rebuilds.
+- **`scenes/workshop/layout.ts`** — all world-coordinate math as pure functions/constants
+  (`laneY(k)`, `floorDepth(n)`, `slotX(i)`, `gateX(i)`, `itemSlot(item)`, `ghostSlotIndex()`,
+  `sceneTransform()`) plus `defaultPipeline()` mirroring the server defaults (all-disabled) and
+  `deriveStageActivity()`. Unit-tested in `test/workshop-layout.test.ts`. Stage slots are fixed
+  by stage index regardless of what's installed, so an item transiting a skipped stage still has
+  a well-defined belt position.
+- **Depth sorting** — `depthSort`/`DepthSorted` in `scenes/iso.ts` enforce back-to-front paint
+  order (descending `x + y`; world (0,0) paints last). The scene-level `DepthSorted` holds one
+  entity per lane plus the orchestrator console; each `ProjectLane` runs its own `DepthSorted`
+  with layers belt(0) < gates(1) < volumetric boxes(2). Lanes occupy disjoint y bands, which is
+  what makes the two-level sort correct. Convention codified in
+  `.cursor/rules/ui-api-state-contracts.mdc`; regression-tested in `test/iso-depth.test.ts`.
+- **`scenes/workshop/ProjectLane.tsx`** — head machine (`LaneHeadMachine`: nameplate, trigger
+  screen, session badge, remove button; clicking it opens the intake form), `Belt`, installed
+  `StageMachine`s only (a not-installed stage renders nothing), `GateArch`es for enabled
+  approval stages, `LaneWorkItemBox`es, and the `GhostSlot` ("+", at the first not-installed
+  stage's slot) which opens the `AddStagePanel` picker of remaining stages. Installing = flipping
+  that stage's `enabled: true` via read-modify-write `PUT` of the full stages record.
+- **Glide animation unchanged**: `LaneWorkItemBox` draws the box at world origin and positions it
+  with a screen-space `translate(dx, dy)` + `transition: transform 700ms`; the uniform scene
+  scale multiplies it exactly. Looping animations stay on an inner `<g>`;
+  `prefers-reduced-motion` collapses all of it.
+- **Selection** — `Workshop.tsx` owns one discriminated union
+  (`stage | item | intake | addStage | null`); panels dock screen-space top-left (outside the
+  scale wrapper), one at a time: `StationConfigPanel` (the enabled checkbox is the
+  remove-machine path), `WorkItemPanel`, `RequestIntakeForm` (submit disabled with a hint while
+  the lane has zero machines), `AddStagePanel`. A WS push deleting the referenced project/item
+  just closes the panel (`validateSelection`).
+- **Fixtures** — walls/floor take `floorW`/`floorD` props; `TimeCardWall` (`wallY`/`xEnd`) and
+  `ChannelsRadio` (`wallX`) anchor to the back walls; one `WorkRequestTunnel` near the back
+  corner; per-lane `ExitChute`s ("SHIPPED") in the right wall at each belt; the orchestrator
+  console sits in the front apron (y < 2.2). `StageLightsStrip` was removed — the always-visible
+  stage machines carry live lamps/screens. The old 9-project cap and `OverflowBadge` are gone;
+  at high project counts the scene just scales smaller (accepted tradeoff).
+- **Routing** — `'line'` was removed from `SceneId`; stale `#line/<id>` URLs fall back to the
+  workshop.
 - Empty-body POSTs send `body: '{}'` — the `req()` helper only sets a JSON content-type when a
   body exists, working around Fastify's empty-JSON-body rejection (pre-existing quirk, documented
   in `api.ts`).
@@ -265,8 +288,11 @@ Per repo convention, no real provider calls in unit tests — the `AgentRunner` 
   loads cleanly at v3; future versions still refuse to load.
 - `packages/triggers/test/runner.test.ts` — enqueue mode files a work item without an agent run;
   bridge rejection records an error run.
-- `apps/web/test/line-layout.test.ts` — station spacing inside the hall, every slot on the belt,
-  held items park before their gate, monitoring parks by the exit, defaults mirror the server.
+- `apps/web/test/workshop-layout.test.ts` (replaced `line-layout.test.ts` in the 2026-07-06
+  revision) — slot spacing inside the floor, disjoint lane bands, every item slot on the belt,
+  held items park before their gate, monitoring parks by the exit, ghost-slot placement,
+  floor-depth growth, scale-to-fit bounds, defaults mirror the server (all disabled).
+  `apps/web/test/iso-depth.test.ts` — depthSort ordering, layer/z tiebreaks, lane regression case.
 
 ### End-to-end harness (reusable recipe)
 
@@ -299,10 +325,12 @@ recreate from the description above.
 - Monitor scheduling is in-process — if the hub isn't running, checks don't fire (same caveat as
   cron triggers).
 - Trigger `mode` is settable at creation only (no `PATCH /api/triggers/:id` yet).
-- The hall renders up to whatever fits; there's no per-item overflow handling for very busy lines
+- Lanes render up to whatever fits; there's no per-item overflow handling for very busy lines
   (items stack at shared slots).
+- There's no lower bound on the scene scale: many projects (≈10+) render legibly small. If that
+  becomes real usage, revisit with label-size compensation, a min scale + pan, or row wrapping.
 - The visual composition was verified by typecheck + layout unit tests + serving the built
-  bundle; eyeball the hall in a browser (`pnpm dev`, click a machine) after visual changes.
+  bundle; eyeball the workshop in a browser (`pnpm dev`) after visual changes.
 
 ### Extension points
 

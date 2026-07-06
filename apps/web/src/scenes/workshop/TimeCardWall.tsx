@@ -1,28 +1,32 @@
 import type { ActivityEntry } from '../../api.js';
-import { FLOOR, iso, poly } from '../iso.js';
+import { iso, poly } from '../iso.js';
 import { Workstation } from './Workstation.jsx';
 
 const SLOTS = 5;
 
 /**
- * Compact activity wall mounted beside the cron clocks on the back-left
- * wall (y = FLOOR). Shows recent activity entries as status cards.
+ * Compact activity wall mounted on the back-left wall (y = wallY).
+ * Shows recent activity entries as status cards.
  */
 export function TimeCardWall({
   activity,
+  wallY,
+  xEnd,
   onOpen,
 }: {
   activity: ActivityEntry[];
+  /** Depth of the back-left wall (the room's floor depth). */
+  wallY: number;
+  /** Right edge of the plaque along the wall. */
+  xEnd: number;
   onOpen: () => void;
 }): JSX.Element {
   const recent = activity.slice(0, SLOTS);
 
-  // Plaque on back-left wall: roughly the right 1/3 of the wall.
-  const xs = 7.35;
-  const xe = 9.8;
+  const xs = xEnd - 2.45;
+  const xe = xEnd;
   const zs = 0.6;
   const ze = 2.6;
-  const wallY = FLOOR;
 
   const bl = iso(xs, wallY, zs);
   const br = iso(xe, wallY, zs);

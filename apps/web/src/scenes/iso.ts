@@ -14,6 +14,8 @@
  *   - "left" side face (the face at MIN X — pointing toward viewer's left)
  */
 
+import { createElement, Fragment, type ReactElement, type ReactNode } from 'react';
+
 export const UNIT = 58;
 const COS30 = Math.cos(Math.PI / 6); // ≈ 0.866
 const SIN30 = 0.5;
@@ -24,8 +26,7 @@ export const UNIT_Z = UNIT;
 export const ORIGIN_X = 800;
 export const ORIGIN_Y = 800;
 
-/** Floor extent in world units (10 × 10). Walls rise WALL_H units. */
-export const FLOOR = 10;
+/** Wall height in world units. Floor extents are computed per scene. */
 export const WALL_H = 3;
 
 export interface Pt {
@@ -91,4 +92,49 @@ export function isoBoxPoints(
     rightFace: [F0, R0, R1, F1],
     leftFace: [F0, L0, L1, F1],
   };
+}
+
+/** A floor-standing object participating in painter's-order depth sorting. */
+export interface SceneEntity {
+  key: string;
+  /** World-space FRONT corner (min x, min y) of the entity's footprint. */
+  anchor: { x: number; y: number; z?: number };
+  /**
+   * Coarse paint layer within one sorted group; lower paints first
+   * (further behind). Use sparingly — e.g. a flat belt (0) under thin
+   * gates (1) under volumetric boxes (2). Default 0.
+   */
+  layer?: number;
+  node: ReactNode;
+}
+
+/**
+ * Back-to-front paint order for floor-standing objects. iso() maps larger
+ * x+y higher on screen, i.e. farther back, so SVG document order must emit
+ * descending x+y: the entity nearest world (0,0) paints LAST and shows
+ * front-most. Never hand-order floor-standing elements — route them
+ * through this.
+ *
+ * Order: layer asc → x+y desc → z asc (raised objects paint on top) →
+ * key (deterministic stability).
+ */
+export function depthSort(entities: readonly SceneEntity[]): SceneEntity[] {
+  return [...entities].sort((a, b) => {
+    const layer = (a.layer ?? 0) - (b.layer ?? 0);
+    if (layer !== 0) return layer;
+    const depth = b.anchor.x + b.anchor.y - (a.anchor.x + a.anchor.y);
+    if (depth !== 0) return depth;
+    const z = (a.anchor.z ?? 0) - (b.anchor.z ?? 0);
+    if (z !== 0) return z;
+    return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
+  });
+}
+
+/** Renders entities in depth-sorted paint order. */
+export function DepthSorted({ entities }: { entities: readonly SceneEntity[] }): ReactElement {
+  return createElement(
+    Fragment,
+    null,
+    depthSort(entities).map((e) => createElement(Fragment, { key: e.key }, e.node)),
+  );
 }
