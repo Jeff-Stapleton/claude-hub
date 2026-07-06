@@ -1,5 +1,6 @@
 import type { CursorProviderConfig } from '@claude-hub/core';
 import { lastJsonObject, runProcess } from './process.js';
+import { renderSkillPreamble } from './toolMaterializer.js';
 import type { RunProjectSessionOptions, RunProjectSessionResult } from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -110,7 +111,18 @@ export function buildCursorArgs(
   if (config.approveMcps) args.push('--approve-mcps');
   if (config.sandbox) args.push('--sandbox', config.sandbox);
   if (opts.extraArgs) args.push(...opts.extraArgs);
-  args.push(opts.prompt);
+
+  // Cursor has no per-run skill-loading flag, so assigned skills ride in as
+  // a prompt preamble. Assigned MCP servers are skipped: the only discovery
+  // path is <workspace>/.cursor/mcp.json, and writing into the user's repo
+  // is not acceptable — v1 documents that MCP applies to claude runs only.
+  if (opts.tools?.mcpServers.length) {
+    console.warn(
+      `[agent-runner] cursor run ignoring ${opts.tools.mcpServers.length} assigned MCP server(s); MCP assignment is claude-only`,
+    );
+  }
+  const preamble = opts.tools ? renderSkillPreamble(opts.tools.skills) : '';
+  args.push(preamble + opts.prompt);
 
   return args;
 }

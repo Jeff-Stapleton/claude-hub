@@ -47,6 +47,21 @@ describe('store schema migration v2 -> v3', () => {
     expect(store.triggers()[0]?.mode).toBeUndefined();
   });
 
+  it('loads a v3 store (no toolbox file) with an empty toolbox', async () => {
+    const paths = new HubPaths(root);
+    await writeFile(
+      paths.file('config'),
+      JSON.stringify({ schemaVersion: 3, httpPort: 7878 }),
+      'utf8',
+    );
+
+    const store = new Store(paths);
+    await store.load();
+
+    expect(store.config().schemaVersion).toBe(STORE_SCHEMA_VERSION);
+    expect(store.toolbox()).toEqual({ skills: [], mcpServers: [] });
+  });
+
   it('still refuses to load a future schema version', async () => {
     const paths = new HubPaths(root);
     await writeFile(

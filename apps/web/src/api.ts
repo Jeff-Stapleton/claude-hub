@@ -1,11 +1,28 @@
 import type {
   AppConfig,
   CronTrigger,
+  McpTransportInput,
   PipelineConfig,
   Project,
+  ToolboxMcpServer,
+  ToolboxSkill,
   UIState,
   WorkItem,
 } from './types.js';
+
+export interface SkillBody {
+  name: string;
+  description: string;
+  body: string;
+  tags?: string[];
+}
+
+export interface McpServerBody {
+  name: string;
+  description?: string;
+  transport: McpTransportInput;
+  tags?: string[];
+}
 
 export interface TriggerRunRecord {
   id: string;
@@ -126,4 +143,27 @@ export const api = {
     }),
   clearOrchestratorSessions: () =>
     req<{ ok: true }>('/api/orchestrator/clear-sessions', { method: 'POST', body: '{}' }),
+  createSkill: (body: SkillBody) =>
+    req<ToolboxSkill>('/api/toolbox/skills', { method: 'POST', body: JSON.stringify(body) }),
+  updateSkill: (id: string, body: SkillBody) =>
+    req<ToolboxSkill>(`/api/toolbox/skills/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteSkill: (id: string) =>
+    req<{ ok: true }>(`/api/toolbox/skills/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  createMcpServer: (body: McpServerBody) =>
+    req<ToolboxMcpServer>('/api/toolbox/mcp-servers', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateMcpServer: (id: string, body: McpServerBody) =>
+    req<ToolboxMcpServer>(`/api/toolbox/mcp-servers/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteMcpServer: (id: string) =>
+    req<{ ok: true }>(`/api/toolbox/mcp-servers/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    }),
 };

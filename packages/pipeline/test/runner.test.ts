@@ -386,3 +386,70 @@ describe('PipelineRunner.runMonitorCheck', () => {
     expect(store.workItems().filter((it) => it.id !== item.id)).toHaveLength(0);
   });
 });
+
+describe('toolbox assignment resolution', () => {
+  let root: string;
+  let store: Store;
+  let runner: PipelineRunner;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'pipeline-tools-'));
+    store = new Store(new HubPaths(root));
+    await store.load();
+    await store.update('projects', [project]);
+    mockRun.mockReset();
+    runner = new PipelineRunner(store, agentRunner);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+
+  it('passes resolved tools per stage and drops dangling ids', async () => {
+    const now = new Date().toISOString();
+    await store.update('toolbox', {
+      skills: [
+        {
+          id: 'skill-1',
+          name: 'my-skill',
+          description: 'Does things',
+          body: '# Body',
+          tags: [],
+          source: 'user',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      mcpServers: [
+        {
+          id: 'mcp-1',
+          name: 'aws-tools',
+          transport: { type: 'stdio', command: 'npx' },
+          tags: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    });
+    await store.update('pipelines', [
+      openPipeline((c) => {
+        c.stages.spec.skills = ['skill-1', 'deleted-skill'];
+        c.stages.spec.mcpServers = ['mcp-1'];
+      }),
+    ]);
+    mockRun.mockResolvedValue(okResult());
+
+    await runner.enqueue({ projectId: project.id, request: 'tool run', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    expect(mockRun).toHaveBeenCalledTimes(4);
+    const specCall = mockRun.mock.calls[0]![0];
+    expect(specCall.tools).toEqual({
+      skills: [{ name: 'my-skill', description: 'Does things', body: '# Body' }],
+      mcpServers: [{ name: 'aws-tools', transport: { type: 'stdio', command: 'npx' } }],
+    });
+    // Unassigned stages still get an (empty) payload — deny by default.
+    const codeCall = mockRun.mock.calls[1]![0];
+    expect(codeCall.tools).toEqual({ skills: [], mcpServers: [] });
+  });
+});

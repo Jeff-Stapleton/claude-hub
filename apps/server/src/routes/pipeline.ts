@@ -50,7 +50,7 @@ export async function registerPipelineRoutes(
       if (!store.projects().some((p) => p.id === projectId)) {
         return reply.code(404).send({ error: 'project not found' });
       }
-      const parsed = parsePipelineBody(req.body, projectId);
+      const parsed = parsePipelineBody(req.body, projectId, store);
       if (typeof parsed === 'string') {
         return reply.code(400).send({ error: parsed });
       }
@@ -145,9 +145,16 @@ async function handleTransition(
  * bad input. Requires all six fixed stages so the stored config is always
  * complete (the UI does read-modify-write of the whole stages record).
  */
-function parsePipelineBody(body: PutPipelineBody, projectId: string): PipelineConfig | string {
+function parsePipelineBody(
+  body: PutPipelineBody,
+  projectId: string,
+  store: Store,
+): PipelineConfig | string {
   const stages = body?.stages;
   if (!stages || typeof stages !== 'object') return 'stages object is required';
+
+  const knownSkillIds = new Set(store.toolbox().skills.map((s) => s.id));
+  const knownServerIds = new Set(store.toolbox().mcpServers.map((m) => m.id));
 
   const parsedStages: Partial<Record<PipelineStageId, StageConfig | MonitorStageConfig>> = {};
   for (const stageId of PIPELINE_STAGE_ORDER) {
@@ -176,6 +183,12 @@ function parsePipelineBody(body: PutPipelineBody, projectId: string): PipelineCo
     if (s.timeoutMs !== undefined && (typeof s.timeoutMs !== 'number' || s.timeoutMs <= 0)) {
       return `stage "${stageId}": timeoutMs must be a positive number`;
     }
+    // Unknown tool ids are a clear 400 rather than a silent drop at save
+    // time; run-time resolution still tolerates dangling ids defensively.
+    const skillsError = validateToolIds(s.skills, knownSkillIds, stageId, 'skills');
+    if (skillsError) return skillsError;
+    const serversError = validateToolIds(s.mcpServers, knownServerIds, stageId, 'mcpServers');
+    if (serversError) return serversError;
 
     const config: StageConfig = {
       enabled: s.enabled,
@@ -188,6 +201,12 @@ function parsePipelineBody(body: PutPipelineBody, projectId: string): PipelineCo
         ? { commands: (s.commands as string[]).map((c) => c.trim()).filter((c) => c.length > 0) }
         : {}),
       ...(s.timeoutMs !== undefined ? { timeoutMs: s.timeoutMs as number } : {}),
+      ...(Array.isArray(s.skills) && s.skills.length > 0
+        ? { skills: s.skills as string[] }
+        : {}),
+      ...(Array.isArray(s.mcpServers) && s.mcpServers.length > 0
+        ? { mcpServers: s.mcpServers as string[] }
+        : {}),
     };
 
     if (stageId === 'monitor') {
@@ -216,4 +235,21 @@ function parsePipelineBody(body: PutPipelineBody, projectId: string): PipelineCo
     stages: parsedStages as PipelineConfig['stages'],
     updatedAt: new Date().toISOString(),
   };
+}
+
+function validateToolIds(
+  raw: unknown,
+  known: ReadonlySet<string>,
+  stageId: PipelineStageId,
+  field: 'skills' | 'mcpServers',
+): string | undefined {
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw) || raw.some((id) => typeof id !== 'string')) {
+    return `stage "${stageId}": ${field} must be an array of strings`;
+  }
+  const unknown = (raw as string[]).find((id) => !known.has(id));
+  if (unknown !== undefined) {
+    return `stage "${stageId}": unknown ${field} id "${unknown}"`;
+  }
+  return undefined;
 }

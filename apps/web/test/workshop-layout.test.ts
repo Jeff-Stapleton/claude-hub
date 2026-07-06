@@ -11,6 +11,10 @@ import {
   SLOT_D,
   SLOT_LOCAL_Y,
   SLOT_W,
+  TOOLBOX_D,
+  TOOLBOX_W,
+  TOOLBOX_X,
+  TOOLBOX_Y,
   defaultPipeline,
   floorDepth,
   gateX,
@@ -79,6 +83,14 @@ describe('workshop lane layout', () => {
     expect(ghostSlotIndex(config.stages)).toBe(1); // spec is next gap
     for (const stage of PIPELINE_STAGE_ORDER) config.stages[stage].enabled = true;
     expect(ghostSlotIndex(config.stages)).toBeNull(); // fully built line
+  });
+
+  it('keeps the tool box inside the apron, clear of the orchestrator console', () => {
+    // Console footprint (OrchestratorConsole.tsx): x 1.1..2.9, y 0.45..1.9.
+    expect(TOOLBOX_X).toBeGreaterThan(1.1 + 1.8);
+    expect(TOOLBOX_X + TOOLBOX_W).toBeLessThan(FLOOR_W);
+    expect(TOOLBOX_Y).toBeGreaterThan(0);
+    expect(TOOLBOX_Y + TOOLBOX_D).toBeLessThan(APRON_D);
   });
 
   it('grows the floor depth linearly with lane count, with a one-band minimum', () => {

@@ -12,6 +12,8 @@ import { ExitChute } from './workshop/ExitChute.jsx';
 import {
   BELT_LOCAL_Y,
   FLOOR_W,
+  TOOLBOX_X,
+  TOOLBOX_Y,
   defaultPipeline,
   floorDepth,
   laneY,
@@ -22,6 +24,8 @@ import { ProjectLane } from './workshop/ProjectLane.jsx';
 import { RequestIntakeForm } from './workshop/RequestIntakeForm.jsx';
 import { StationConfigPanel } from './workshop/StationConfigPanel.jsx';
 import { TimeCardWall } from './workshop/TimeCardWall.jsx';
+import { ToolboxCrate } from './workshop/ToolboxCrate.jsx';
+import { ToolboxPanel, type ToolboxAction } from './workshop/ToolboxPanel.jsx';
 import { WorkItemPanel } from './workshop/WorkItemPanel.jsx';
 import { WorkRequestTunnel } from './workshop/WorkRequestTunnel.jsx';
 
@@ -44,7 +48,10 @@ type WorkshopSelection =
   | { kind: 'item'; itemId: string }
   | { kind: 'intake'; projectId: string }
   | { kind: 'addStage'; projectId: string }
+  | { kind: 'toolbox' }
   | null;
+
+const EMPTY_TOOLBOX = { skills: [], mcpServers: [] };
 
 export function Workshop({
   state,
@@ -102,6 +109,26 @@ export function Workshop({
         : action === 'retry'
           ? api.retryWorkItem(id)
           : api.cancelWorkItem(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
+
+  const toolboxMutation = useMutation({
+    mutationFn: (action: ToolboxAction): Promise<unknown> => {
+      switch (action.type) {
+        case 'create-skill':
+          return api.createSkill(action.body);
+        case 'update-skill':
+          return api.updateSkill(action.id, action.body);
+        case 'delete-skill':
+          return api.deleteSkill(action.id);
+        case 'create-server':
+          return api.createMcpServer(action.body);
+        case 'update-server':
+          return api.updateMcpServer(action.id, action.body);
+        case 'delete-server':
+          return api.deleteMcpServer(action.id);
+      }
+    },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
   });
 
@@ -175,6 +202,17 @@ export function Workshop({
     anchor: { x: CONSOLE_X, y: CONSOLE_Y },
     node: <OrchestratorConsole state={state.orchestrator} onOpen={() => navigate('orchestrator')} />,
   });
+  const toolbox = state.toolbox ?? EMPTY_TOOLBOX;
+  entities.push({
+    key: 'toolbox',
+    anchor: { x: TOOLBOX_X, y: TOOLBOX_Y },
+    node: (
+      <ToolboxCrate
+        toolCount={toolbox.skills.length + toolbox.mcpServers.length}
+        onOpen={() => toggle({ kind: 'toolbox' })}
+      />
+    ),
+  });
 
   return (
     <svg
@@ -233,6 +271,7 @@ export function Workshop({
           projectLabel={labelFor(selected.projectId)}
           stage={selected.stage}
           config={configFor(selected.projectId).stages[selected.stage]}
+          toolbox={toolbox}
           isPending={saveMutation.isPending}
           error={saveMutation.error}
           onSave={(next) =>
@@ -265,6 +304,15 @@ export function Workshop({
           isPending={createMutation.isPending}
           error={createMutation.error}
           onSubmit={(body) => createMutation.mutate({ projectId: selected.projectId, body })}
+          onClose={() => setSelection(null)}
+        />
+      ) : null}
+      {selected?.kind === 'toolbox' ? (
+        <ToolboxPanel
+          toolbox={toolbox}
+          isPending={toolboxMutation.isPending}
+          error={toolboxMutation.error}
+          onAction={(action) => toolboxMutation.mutate(action)}
           onClose={() => setSelection(null)}
         />
       ) : null}
@@ -326,10 +374,12 @@ type ValidatedSelection =
   | { kind: 'item'; itemId: string; item: NonNullable<UIState['workItems']>[number] }
   | { kind: 'intake'; projectId: string }
   | { kind: 'addStage'; projectId: string }
+  | { kind: 'toolbox' }
   | null;
 
 function validateSelection(selection: WorkshopSelection, state: UIState): ValidatedSelection {
   if (!selection) return null;
+  if (selection.kind === 'toolbox') return selection;
   if (selection.kind === 'item') {
     const item = (state.workItems ?? []).find((it) => it.id === selection.itemId);
     return item ? { ...selection, item } : null;

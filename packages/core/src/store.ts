@@ -12,6 +12,7 @@ import {
   type Project,
   type StoreEntityKey,
   type StoreSnapshot,
+  type Toolbox,
   type Trigger,
   type WorkItem,
 } from './types.js';
@@ -59,6 +60,7 @@ function emptySnapshot(): StoreSnapshot {
     orchestrator: { ...DEFAULT_ORCHESTRATOR, channelSessions: {} },
     pipelines: [],
     workItems: [],
+    toolbox: { skills: [], mcpServers: [] },
   };
 }
 
@@ -123,6 +125,7 @@ export class Store extends EventEmitter {
     fresh.orchestrator = await readJsonOrDefault(this.paths.file('orchestrator'), fresh.orchestrator);
     fresh.pipelines = await readJsonOrDefault(this.paths.file('pipelines'), fresh.pipelines);
     fresh.workItems = await readJsonOrDefault(this.paths.file('workItems'), fresh.workItems);
+    fresh.toolbox = await readJsonOrDefault(this.paths.file('toolbox'), fresh.toolbox);
 
     this.snapshot = fresh;
     this.loaded = true;
@@ -161,6 +164,10 @@ export class Store extends EventEmitter {
 
   workItems(): WorkItem[] {
     return this.get().workItems;
+  }
+
+  toolbox(): Toolbox {
+    return this.get().toolbox;
   }
 
   // -- writes ---------------------------------------------------------------
@@ -245,12 +252,13 @@ function mergeConfigDefaults(persisted: Partial<AppConfig>): AppConfig {
   const config: AppConfig = {
     ...DEFAULT_CONFIG,
     ...persisted,
-    // v1 -> v2 -> v3 are purely additive (new files default to [], new
+    // v1 -> v2 -> v3 -> v4 are purely additive (new files default to [], new
     // optional fields back-filled here), so older stores coerce forward.
     schemaVersion:
       persisted.schemaVersion === undefined ||
       persisted.schemaVersion === 1 ||
-      persisted.schemaVersion === 2
+      persisted.schemaVersion === 2 ||
+      persisted.schemaVersion === 3
         ? STORE_SCHEMA_VERSION
         : persisted.schemaVersion,
     defaultProvider: persisted.defaultProvider ?? DEFAULT_CONFIG.defaultProvider,

@@ -22,7 +22,9 @@ import { registerOrchestratorRoutes } from './routes/orchestrator.js';
 import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerProjectRoutes } from './routes/projects.js';
 import { registerStateRoutes } from './routes/state.js';
+import { registerToolboxRoutes } from './routes/toolbox.js';
 import { registerTriggerRoutes } from './routes/triggers.js';
+import { seedBundledSkills } from './toolboxSeed.js';
 import { registerWs } from './ws.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -57,6 +59,7 @@ function randomAck(): string {
 async function main(): Promise<void> {
   const store = new Store();
   await store.load();
+  await seedBundledSkills(store);
 
   const ccReader = new CCConfigReader();
   const ccWatcher = new CCWatcher(ccReader);
@@ -160,6 +163,7 @@ async function main(): Promise<void> {
   await registerTriggerRoutes(app, store, triggerRunner);
   await registerPipelineRoutes(app, store, pipelineRunner);
   await registerChannelRoutes(app, store);
+  await registerToolboxRoutes(app, store);
   await registerActivityRoutes(app, store);
   await registerOrchestratorRoutes(app, store);
 

@@ -1,4 +1,4 @@
-import type { AgentRunner } from '@claude-hub/agent-runner';
+import type { AgentRunner, RunToolAssignments } from '@claude-hub/agent-runner';
 import {
   render,
   type AgentProviderId,
@@ -75,6 +75,7 @@ export async function executeStage(
       prompt,
       ...(sessionId !== undefined ? { sessionId } : {}),
       timeoutMs,
+      tools: resolveToolAssignments(deps.store, stageId, cfg),
     });
 
     if (!result.ok) {
@@ -118,6 +119,39 @@ export async function executeStage(
     ...(prompt !== undefined ? { prompt } : {}),
     ...(session ? { session } : {}),
   };
+}
+
+/**
+ * Resolves a stage's toolbox assignments (ids) to full definitions for the
+ * agent runner. Always returns a payload — present-but-empty keeps runs
+ * deny-by-default (strict MCP config). Ids whose tool has since been deleted
+ * are dropped with a warning rather than failing the stage.
+ */
+function resolveToolAssignments(
+  store: Store,
+  stageId: PipelineStageId,
+  cfg: StageConfig,
+): RunToolAssignments {
+  const toolbox = store.toolbox();
+  const skills: RunToolAssignments['skills'] = [];
+  for (const id of cfg.skills ?? []) {
+    const skill = toolbox.skills.find((s) => s.id === id);
+    if (!skill) {
+      console.warn(`[pipeline] stage "${stageId}": assigned skill ${id} no longer exists`);
+      continue;
+    }
+    skills.push({ name: skill.name, description: skill.description, body: skill.body });
+  }
+  const mcpServers: RunToolAssignments['mcpServers'] = [];
+  for (const id of cfg.mcpServers ?? []) {
+    const server = toolbox.mcpServers.find((m) => m.id === id);
+    if (!server) {
+      console.warn(`[pipeline] stage "${stageId}": assigned MCP server ${id} no longer exists`);
+      continue;
+    }
+    mcpServers.push({ name: server.name, transport: server.transport });
+  }
+  return { skills, mcpServers };
 }
 
 /**

@@ -16,7 +16,15 @@ export class HubPaths {
   }
 
   file(
-    name: 'config' | 'projects' | 'channels' | 'triggers' | 'orchestrator' | 'pipelines' | 'workItems',
+    name:
+      | 'config'
+      | 'projects'
+      | 'channels'
+      | 'triggers'
+      | 'orchestrator'
+      | 'pipelines'
+      | 'workItems'
+      | 'toolbox',
   ): string {
     return join(this.root, `${name}.json`);
   }

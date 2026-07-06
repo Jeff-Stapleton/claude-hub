@@ -11,6 +11,7 @@ import type {
   WorkItem,
 } from '@claude-hub/core';
 import { effectivePipelineConfig } from '@claude-hub/pipeline';
+import { redactToolbox, type RedactedToolbox } from './routes/toolbox.js';
 
 /**
  * The shape returned by GET /api/state and pushed over the WS channel.
@@ -29,6 +30,8 @@ export interface UIState {
   pipelines: PipelineConfig[];
   /** Live work items across all projects; provider session ids stripped. */
   workItems: RedactedWorkItem[];
+  /** Skills + MCP servers; MCP env/header values stripped to key names. */
+  toolbox: RedactedToolbox;
 }
 
 export type RedactedWorkItem = Omit<WorkItem, 'sessions'>;
@@ -123,5 +126,6 @@ export async function buildUIState(
     orchestrator: snapshot.orchestrator,
     pipelines,
     workItems,
+    toolbox: redactToolbox(snapshot.toolbox),
   };
 }

@@ -135,7 +135,52 @@ export interface StageConfig {
   intervalMinutes?: number;
   /** Monitor stage only. */
   maxChecks?: number;
+  /** Toolbox skill ids this machine may use. Absent/empty = none. */
+  skills?: string[];
+  /** Toolbox MCP server ids this machine may use. Absent/empty = none. */
+  mcpServers?: string[];
 }
+
+// ---------------------------------------------------------------------------
+// Toolbox (skills + MCP servers assignable per machine)
+// ---------------------------------------------------------------------------
+
+export interface ToolboxSkill {
+  id: string;
+  name: string;
+  description: string;
+  body: string;
+  tags: string[];
+  source: 'bundled' | 'user';
+  bundledVersion?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** MCP env/header values are secrets; the server only sends key names. */
+export type RedactedMcpTransport =
+  | { type: 'stdio'; command: string; args?: string[]; envKeys: string[] }
+  | { type: 'http'; url: string; headerKeys: string[] };
+
+export interface ToolboxMcpServer {
+  id: string;
+  name: string;
+  description?: string;
+  transport: RedactedMcpTransport;
+  tags: string[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Toolbox {
+  skills: ToolboxSkill[];
+  mcpServers: ToolboxMcpServer[];
+}
+
+/** Plaintext transport shape sent TO the server on create/update. */
+export type McpTransportInput =
+  | { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }
+  | { type: 'http'; url: string; headers?: Record<string, string> };
 
 export interface PipelineConfig {
   projectId: string;
@@ -196,4 +241,6 @@ export interface UIState {
   /** Optional so payloads from a pre-pipeline server still render. */
   pipelines?: PipelineConfig[];
   workItems?: WorkItem[];
+  /** Optional so payloads from a pre-toolbox server still render. */
+  toolbox?: Toolbox;
 }

@@ -57,6 +57,16 @@ export const EXIT_PARK_X = LANE_BELT_X1 - 0.6;
 /** Fixed floor width: the longest possible lane plus a right margin. */
 export const FLOOR_W = LANE_BELT_X1 + 0.85;
 
+/**
+ * Tool box crate: front apron, to the right of the orchestrator console
+ * (console footprint: x 1.1..2.9, y 0.45..1.9).
+ */
+export const TOOLBOX_X = 4.1;
+export const TOOLBOX_Y = 0.55;
+export const TOOLBOX_W = 1.35;
+export const TOOLBOX_D = 1.0;
+export const TOOLBOX_H = 0.8;
+
 export function laneY(laneIndex: number): number {
   return APRON_D + laneIndex * LANE_D;
 }

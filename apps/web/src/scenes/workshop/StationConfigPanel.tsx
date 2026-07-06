@@ -1,5 +1,11 @@
 import { useState } from 'react';
-import type { AgentProviderId, PipelineStageId, StageConfig, StageGate } from '../../types.js';
+import type {
+  AgentProviderId,
+  PipelineStageId,
+  StageConfig,
+  StageGate,
+  Toolbox,
+} from '../../types.js';
 import { STAGE_META } from './layout.js';
 import * as s from './panelStyles.js';
 
@@ -13,6 +19,8 @@ interface Draft {
   commands: string;
   intervalMinutes: string;
   maxChecks: string;
+  skills: string[];
+  mcpServers: string[];
 }
 
 function toDraft(config: StageConfig): Draft {
@@ -24,6 +32,8 @@ function toDraft(config: StageConfig): Draft {
     commands: (config.commands ?? []).join('\n'),
     intervalMinutes: config.intervalMinutes !== undefined ? String(config.intervalMinutes) : '',
     maxChecks: config.maxChecks !== undefined ? String(config.maxChecks) : '',
+    skills: config.skills ?? [],
+    mcpServers: config.mcpServers ?? [],
   };
 }
 
@@ -47,6 +57,8 @@ function fromDraft(stage: PipelineStageId, draft: Draft): StageConfig {
     ...(stage === 'monitor' && draft.maxChecks !== '' && Number.isFinite(maxChecks) && maxChecks >= 1
       ? { maxChecks: maxChecks }
       : {}),
+    ...(draft.skills.length > 0 ? { skills: draft.skills } : {}),
+    ...(draft.mcpServers.length > 0 ? { mcpServers: draft.mcpServers } : {}),
   };
 }
 
@@ -60,6 +72,7 @@ export function StationConfigPanel({
   projectLabel,
   stage,
   config,
+  toolbox,
   isPending,
   error,
   onSave,
@@ -68,6 +81,7 @@ export function StationConfigPanel({
   projectLabel: string;
   stage: PipelineStageId;
   config: StageConfig;
+  toolbox: Toolbox;
   isPending: boolean;
   error: unknown;
   onSave: (next: StageConfig) => void;
@@ -77,6 +91,11 @@ export function StationConfigPanel({
   const meta = STAGE_META[stage];
   const set = <K extends keyof Draft>(key: K, value: Draft[K]): void =>
     setDraft((d) => ({ ...d, [key]: value }));
+  const toggleTool = (field: 'skills' | 'mcpServers', id: string): void =>
+    setDraft((d) => ({
+      ...d,
+      [field]: d[field].includes(id) ? d[field].filter((x) => x !== id) : [...d[field], id],
+    }));
 
   return (
     <foreignObject x={28} y={90} width={470} height={540}>
@@ -178,6 +197,13 @@ export function StationConfigPanel({
           </div>
         ) : null}
 
+        <ToolPicker
+          toolbox={toolbox}
+          selectedSkills={draft.skills}
+          selectedServers={draft.mcpServers}
+          onToggle={toggleTool}
+        />
+
         <button type="submit" disabled={isPending} style={s.panelButton}>
           {isPending ? 'Saving…' : 'Save station'}
         </button>
@@ -186,6 +212,145 @@ export function StationConfigPanel({
     </foreignObject>
   );
 }
+
+/**
+ * Per-machine tool assignment: a tag-filterable checkbox list over the
+ * toolbox catalog. Machines get no tools unless checked here — that keeps
+ * agents away from tools they shouldn't touch and out of context they
+ * don't need.
+ */
+function ToolPicker({
+  toolbox,
+  selectedSkills,
+  selectedServers,
+  onToggle,
+}: {
+  toolbox: Toolbox;
+  selectedSkills: string[];
+  selectedServers: string[];
+  onToggle: (field: 'skills' | 'mcpServers', id: string) => void;
+}): JSX.Element {
+  const [filter, setFilter] = useState('');
+  const q = filter.trim().toLowerCase();
+  const matches = (tool: { name: string; description?: string; tags: string[] }): boolean =>
+    q === '' ||
+    tool.name.toLowerCase().includes(q) ||
+    (tool.description ?? '').toLowerCase().includes(q) ||
+    tool.tags.some((tag) => tag.includes(q));
+
+  const skills = toolbox.skills.filter(matches);
+  const servers = toolbox.mcpServers.filter(matches);
+  const empty = toolbox.skills.length === 0 && toolbox.mcpServers.length === 0;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+      <div style={{ fontSize: 11, color: '#c8a888' }}>
+        tools{' '}
+        <span style={s.panelHint}>
+          — machines get no tools unless assigned here ({selectedSkills.length +
+            selectedServers.length}{' '}
+          assigned)
+        </span>
+      </div>
+      {empty ? (
+        <div style={s.panelHint}>the tool box is empty — click the red chest to add tools</div>
+      ) : (
+        <>
+          <input
+            placeholder="Filter by name or tag…"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            style={s.panelInput}
+          />
+          <div style={toolList}>
+            {skills.map((skill) => (
+              <ToolCheckRow
+                key={skill.id}
+                checked={selectedSkills.includes(skill.id)}
+                name={skill.name}
+                hint={skill.description}
+                tags={skill.tags}
+                onToggle={() => onToggle('skills', skill.id)}
+              />
+            ))}
+            {servers.map((server) => (
+              <ToolCheckRow
+                key={server.id}
+                checked={selectedServers.includes(server.id)}
+                name={`${server.name} (MCP)`}
+                hint={server.description ?? ''}
+                tags={server.tags}
+                onToggle={() => onToggle('mcpServers', server.id)}
+              />
+            ))}
+            {skills.length === 0 && servers.length === 0 ? (
+              <div style={s.panelHint}>no tools match the filter</div>
+            ) : null}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ToolCheckRow({
+  checked,
+  name,
+  hint,
+  tags,
+  onToggle,
+}: {
+  checked: boolean;
+  name: string;
+  hint: string;
+  tags: string[];
+  onToggle: () => void;
+}): JSX.Element {
+  return (
+    <label style={toolCheckRow}>
+      <input type="checkbox" checked={checked} onChange={onToggle} />
+      <span style={{ color: '#ead6b8' }}>{name}</span>
+      {tags.map((tag) => (
+        <span key={tag} style={toolTag}>
+          {tag}
+        </span>
+      ))}
+      <span style={{ ...s.panelHint, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+        {hint}
+      </span>
+    </label>
+  );
+}
+
+const toolList: React.CSSProperties = {
+  display: 'flex',
+  flexDirection: 'column',
+  gap: 2,
+  maxHeight: 130,
+  overflow: 'auto',
+  border: '1px solid #2a1f17',
+  borderRadius: 5,
+  padding: 6,
+  background: '#100b08',
+};
+
+const toolCheckRow: React.CSSProperties = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  fontSize: 11,
+  cursor: 'pointer',
+  minWidth: 0,
+};
+
+const toolTag: React.CSSProperties = {
+  fontSize: 9,
+  padding: '0px 5px',
+  borderRadius: 8,
+  border: '1px solid #4a3624',
+  color: '#c8a888',
+  flexShrink: 0,
+};
 
 const closeButton: React.CSSProperties = {
   background: 'transparent',

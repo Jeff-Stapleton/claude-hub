@@ -181,6 +181,13 @@ export interface StageConfig {
   commands?: string[];
   /** Falls back to config.triggerTimeoutMs. */
   timeoutMs?: number;
+  /**
+   * Toolbox skill ids this machine may use. Absent or empty means the
+   * machine gets no hub-managed skills — tools are deny-by-default.
+   */
+  skills?: string[];
+  /** Toolbox MCP server ids this machine may use. Deny-by-default like skills. */
+  mcpServers?: string[];
 }
 
 export interface MonitorStageConfig extends StageConfig {
@@ -264,6 +271,51 @@ export interface WorkItem {
 }
 
 // ---------------------------------------------------------------------------
+// Toolbox (skills + MCP servers assignable per machine)
+// ---------------------------------------------------------------------------
+
+/** Slug used for skill/server names: becomes a directory name and JSON key. */
+export const TOOLBOX_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
+
+export interface ToolboxSkill {
+  /** uuid for user skills; bundled skills use the stable "bundled-<slug>". */
+  id: string;
+  /** Dir-safe slug (TOOLBOX_NAME_PATTERN); becomes the skill directory name. */
+  name: string;
+  /** SKILL.md frontmatter description; drives when the model invokes it. */
+  description: string;
+  /** SKILL.md markdown body. */
+  body: string;
+  tags: string[];
+  source: 'bundled' | 'user';
+  /** Bundled only: asset version; a higher shipped version reseeds the entry. */
+  bundledVersion?: number;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export type McpTransport =
+  | { type: 'stdio'; command: string; args?: string[]; env?: Record<string, string> }
+  | { type: 'http'; url: string; headers?: Record<string, string> };
+
+export interface ToolboxMcpServer {
+  id: string;
+  /** Slug (TOOLBOX_NAME_PATTERN); becomes the mcpServers key in generated config. */
+  name: string;
+  description?: string;
+  /** env values / headers may carry secrets; never sent to the UI. */
+  transport: McpTransport;
+  tags: string[];
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export interface Toolbox {
+  skills: ToolboxSkill[];
+  mcpServers: ToolboxMcpServer[];
+}
+
+// ---------------------------------------------------------------------------
 // Orchestrator
 // ---------------------------------------------------------------------------
 
@@ -327,7 +379,7 @@ export type AgentProviderConfigs = {
  * file lands; the store refuses to load mismatched versions to avoid silent
  * data corruption.
  */
-export const STORE_SCHEMA_VERSION = 3;
+export const STORE_SCHEMA_VERSION = 4;
 
 export interface AppConfig {
   schemaVersion: number;
@@ -361,6 +413,7 @@ export interface StoreSnapshot {
   pipelines: PipelineConfig[];
   /** Live work items only (queued/running/waiting/monitoring/failed); terminal items are archived to JSONL. */
   workItems: WorkItem[];
+  toolbox: Toolbox;
 }
 
 export type StoreEntityKey = keyof StoreSnapshot;
