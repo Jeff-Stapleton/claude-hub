@@ -214,7 +214,7 @@ export class PipelineRunner extends EventEmitter {
         item,
         'monitor',
         cfg,
-        project.path,
+        project,
       );
       ok = res.ok;
       output = res.output;
@@ -395,7 +395,7 @@ export class PipelineRunner extends EventEmitter {
             runningItem,
             stage,
             cfg,
-            project.path,
+            project,
           );
           ok = res.ok;
           output = res.output;

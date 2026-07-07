@@ -1,10 +1,11 @@
-import { mkdtemp, rm } from 'node:fs/promises';
+import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { AgentRunner } from '@claude-hub/agent-runner';
 import { HubPaths, Store, type Trigger } from '@claude-hub/core';
+import { GitJobRunner } from '../src/git/jobs.js';
 import { registerProjectRoutes } from '../src/routes/projects.js';
 import { registerChannelRoutes } from '../src/routes/channels.js';
 import { registerConfigRoutes } from '../src/routes/config.js';
@@ -16,6 +17,7 @@ describe('project routes', () => {
   let app: FastifyInstance;
   let store: Store;
   let root: string;
+  let projectsRoot: string;
   const agentRunner: AgentRunner = {
     runProjectSession: vi.fn(),
   };
@@ -24,9 +26,12 @@ describe('project routes', () => {
     root = await mkdtemp(join(tmpdir(), 'routes-test-'));
     store = new Store(new HubPaths(root));
     await store.load();
+    // Point new project roots inside the test sandbox.
+    projectsRoot = join(root, 'projects');
+    await store.update('config', (c) => ({ ...c, projectsRoot }));
     app = Fastify();
     vi.mocked(agentRunner.runProjectSession).mockReset();
-    await registerProjectRoutes(app, store, agentRunner);
+    await registerProjectRoutes(app, store, agentRunner, new GitJobRunner(store));
     await app.ready();
   });
 
@@ -35,7 +40,7 @@ describe('project routes', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('POST /api/projects creates a project', async () => {
+  it('POST /api/projects with a legacy {path, alias} body still creates a project', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/projects',
@@ -44,12 +49,15 @@ describe('project routes', () => {
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body);
     expect(body.path).toBe('/tmp/myproj');
-    expect(body.alias).toBe('myproj');
+    expect(body.name).toBe('myproj');
+    expect(body.vision).toBe('');
+    expect(body.repos).toHaveLength(1);
+    expect(body.repos[0]).toMatchObject({ origin: 'local', status: 'ready', path: '/tmp/myproj' });
     expect(body.id).toBeDefined();
     expect(store.projects()).toHaveLength(1);
   });
 
-  it('POST /api/projects rejects missing path', async () => {
+  it('POST /api/projects rejects a body with neither path nor name', async () => {
     const res = await app.inject({
       method: 'POST',
       url: '/api/projects',
@@ -58,7 +66,7 @@ describe('project routes', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('POST /api/projects returns existing project if path is duplicate', async () => {
+  it('POST /api/projects (legacy body) returns existing project if path is duplicate', async () => {
     await app.inject({ method: 'POST', url: '/api/projects', payload: { path: '/x' } });
     const res = await app.inject({
       method: 'POST',
@@ -67,6 +75,116 @@ describe('project routes', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(store.projects()).toHaveLength(1);
+  });
+
+  it('POST /api/projects creates a project from the wizard body (local repo)', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'routes-repo-'));
+    try {
+      const res = await app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        payload: {
+          name: 'My Product',
+          vision: 'Ship the thing.',
+          repos: [{ mode: 'local', path: repoDir }],
+          context: '# notes',
+        },
+      });
+      expect(res.statusCode).toBe(200);
+      const body = JSON.parse(res.body);
+      expect(body.name).toBe('My Product');
+      expect(body.vision).toBe('Ship the thing.');
+      expect(body.context).toBe('# notes');
+      expect(body.path).toBe(join(projectsRoot, 'my-product'));
+      expect(body.repos[0]).toMatchObject({ origin: 'local', status: 'ready', path: repoDir });
+      // The project root directory is created eagerly.
+      await expect(access(body.path)).resolves.toBeUndefined();
+    } finally {
+      await rm(repoDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    [{ vision: 'v', repos: [{ mode: 'local', path: '/tmp/x' }] }, /name is required/],
+    [{ name: 'x', repos: [{ mode: 'local', path: '/tmp/x' }] }, /vision is required/],
+    [{ name: 'x', vision: 'v', repos: [] }, /at least one repo/],
+    [{ name: 'x', vision: 'v', repos: [{ mode: 'local', path: 'relative' }] }, /absolute/],
+    [
+      { name: 'x', vision: 'v', repos: [{ mode: 'create', name: 'r' }] },
+      /credentialId is required/,
+    ],
+    [
+      { name: 'x', vision: 'v', repos: [{ mode: 'local', path: '/tmp/x' }], skills: ['nope'] },
+      /unknown tool id/,
+    ],
+  ])('POST /api/projects rejects invalid body %#', async (payload, message) => {
+    const res = await app.inject({ method: 'POST', url: '/api/projects', payload });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(message);
+  });
+
+  it('PUT /api/projects/:id edits name, vision, and context', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/projects',
+      payload: { path: '/tmp/editme' },
+    });
+    const id = JSON.parse(create.body).id;
+
+    const res = await app.inject({
+      method: 'PUT',
+      url: `/api/projects/${id}`,
+      payload: { name: 'renamed', vision: 'clearer now', context: 'ctx' },
+    });
+    expect(res.statusCode).toBe(200);
+    const project = store.projects()[0]!;
+    expect(project.name).toBe('renamed');
+    expect(project.vision).toBe('clearer now');
+    expect(project.context).toBe('ctx');
+  });
+
+  it('repo add/remove: rejects removing the last repo, never touches disk', async () => {
+    const repoDir = await mkdtemp(join(tmpdir(), 'routes-repo-'));
+    try {
+      const create = await app.inject({
+        method: 'POST',
+        url: '/api/projects',
+        payload: { name: 'two-repos', vision: 'v', repos: [{ mode: 'local', path: repoDir }] },
+      });
+      const project = JSON.parse(create.body);
+      const firstRepoId = project.repos[0].id;
+
+      const last = await app.inject({
+        method: 'DELETE',
+        url: `/api/projects/${project.id}/repos/${firstRepoId}`,
+      });
+      expect(last.statusCode).toBe(400);
+      expect(JSON.parse(last.body).error).toMatch(/at least one repo/);
+
+      const second = await mkdtemp(join(tmpdir(), 'routes-repo2-'));
+      try {
+        const add = await app.inject({
+          method: 'POST',
+          url: `/api/projects/${project.id}/repos`,
+          payload: { mode: 'local', path: second },
+        });
+        expect(add.statusCode).toBe(200);
+        expect(store.projects()[0]!.repos).toHaveLength(2);
+
+        const del = await app.inject({
+          method: 'DELETE',
+          url: `/api/projects/${project.id}/repos/${firstRepoId}`,
+        });
+        expect(del.statusCode).toBe(200);
+        expect(store.projects()[0]!.repos).toHaveLength(1);
+        // Removing the record never deletes the working tree.
+        await expect(access(repoDir)).resolves.toBeUndefined();
+      } finally {
+        await rm(second, { recursive: true, force: true });
+      }
+    } finally {
+      await rm(repoDir, { recursive: true, force: true });
+    }
   });
 
   it('DELETE /api/projects/:id removes a project', async () => {

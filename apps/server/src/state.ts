@@ -11,6 +11,7 @@ import type {
   WorkItem,
 } from '@claude-hub/core';
 import { effectivePipelineConfig } from '@claude-hub/pipeline';
+import { redactCredential, type RedactedGitCredential } from './routes/git.js';
 import { redactToolbox, type RedactedToolbox } from './routes/toolbox.js';
 
 /**
@@ -32,6 +33,8 @@ export interface UIState {
   workItems: RedactedWorkItem[];
   /** Skills + MCP servers; MCP env/header values stripped to key names. */
   toolbox: RedactedToolbox;
+  /** Git credentials with tokens stripped; repos reference these by id. */
+  gitCredentials: RedactedGitCredential[];
 }
 
 export type RedactedWorkItem = Omit<WorkItem, 'sessions'>;
@@ -127,5 +130,6 @@ export async function buildUIState(
     pipelines,
     workItems,
     toolbox: redactToolbox(snapshot.toolbox),
+    gitCredentials: snapshot.gitCredentials.map(redactCredential),
   };
 }

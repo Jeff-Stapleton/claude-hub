@@ -43,7 +43,11 @@ describe('web api client', () => {
   });
 
   it('sets content-type application/json when a body is sent', async () => {
-    await api.addProject({ path: '/x' });
+    await api.createProject({
+      name: 'x',
+      vision: 'v',
+      repos: [{ mode: 'local', path: '/x' }],
+    });
     const headers = new Headers(calls.at(-1)?.init?.headers ?? {});
     expect(headers.get('content-type')).toBe('application/json');
   });
@@ -67,6 +71,8 @@ describe('web api client', () => {
 
   it('throws an Error including status code and response body on non-2xx', async () => {
     nextResponse = { ok: false, status: 400, statusText: 'Bad Request', body: '{"error":"nope"}' };
-    await expect(api.addProject({ path: '/x' })).rejects.toThrow(/400[\s\S]*nope/);
+    await expect(
+      api.createProject({ name: 'x', vision: 'v', repos: [{ mode: 'local', path: '/x' }] }),
+    ).rejects.toThrow(/400[\s\S]*nope/);
   });
 });

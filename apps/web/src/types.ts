@@ -7,10 +7,33 @@
  * the browser bundle.
  */
 
+export type RepoOrigin = 'local' | 'clone' | 'create';
+
+export type RepoStatus = 'pending' | 'cloning' | 'creating' | 'pushing' | 'ready' | 'failed';
+
+export interface ProjectRepo {
+  id: string;
+  name: string;
+  path: string;
+  origin: RepoOrigin;
+  remoteUrl?: string;
+  credentialId?: string;
+  status: RepoStatus;
+  error?: string;
+  addedAt: string;
+}
+
 export interface Project {
   id: string;
+  /** Project root directory; agent sessions run here. */
   path: string;
-  alias?: string;
+  name: string;
+  vision: string;
+  repos: ProjectRepo[];
+  context?: string;
+  /** Project-level toolbox assignments, unioned with each machine's own. */
+  skills?: string[];
+  mcpServers?: string[];
   addedAt: string;
   agentSessions: ProjectAgentSessionSummary[];
   /** Back-compat field retained by the server for older bundles. */
@@ -19,6 +42,15 @@ export interface Project {
     sessionCount: number;
     lastActivity?: string;
   };
+}
+
+/** Git credential as the server exposes it: token stripped. */
+export interface RedactedGitCredential {
+  id: string;
+  name: string;
+  provider: 'github';
+  tokenSet: true;
+  createdAt: string;
 }
 
 export type AgentProviderId = 'claude' | 'cursor';
@@ -58,6 +90,8 @@ export interface AppConfig {
     claude: ClaudeProviderConfig;
     cursor: CursorProviderConfig;
   };
+  /** Optional so payloads from a pre-v5 server still render. */
+  projectsRoot?: string;
 }
 
 export interface DiscordChannel {
@@ -243,4 +277,6 @@ export interface UIState {
   workItems?: WorkItem[];
   /** Optional so payloads from a pre-toolbox server still render. */
   toolbox?: Toolbox;
+  /** Optional so payloads from a pre-git-credentials server still render. */
+  gitCredentials?: RedactedGitCredential[];
 }

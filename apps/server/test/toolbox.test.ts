@@ -210,6 +210,44 @@ describe('toolbox routes', () => {
     expect(stages.spec.skills).toEqual(['other-id']);
     expect(stages.code.skills).toBeUndefined();
   });
+
+  it('DELETE scrubs the tool id from project-level assignments too', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/toolbox/skills',
+      payload: SKILL_PAYLOAD,
+    });
+    const { id } = JSON.parse(create.body);
+    await store.update('projects', [
+      {
+        id: 'p1',
+        path: '/tmp/proj',
+        name: 'proj',
+        vision: '',
+        repos: [],
+        skills: [id, 'other-id'],
+        mcpServers: ['srv-1'],
+        addedAt: new Date().toISOString(),
+      },
+      {
+        id: 'p2',
+        path: '/tmp/proj2',
+        name: 'proj2',
+        vision: '',
+        repos: [],
+        skills: [id],
+        addedAt: new Date().toISOString(),
+      },
+    ]);
+
+    const res = await app.inject({ method: 'DELETE', url: `/api/toolbox/skills/${id}` });
+    expect(res.statusCode).toBe(200);
+    const [p1, p2] = store.projects();
+    expect(p1!.skills).toEqual(['other-id']);
+    expect(p1!.mcpServers).toEqual(['srv-1']);
+    // A now-empty list is dropped entirely, matching the stage scrub.
+    expect(p2!.skills).toBeUndefined();
+  });
 });
 
 describe('pipeline PUT with tool assignments', () => {

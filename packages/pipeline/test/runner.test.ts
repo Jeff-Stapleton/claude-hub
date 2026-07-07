@@ -20,6 +20,18 @@ const agentRunner: AgentRunner = { runProjectSession: mockRun };
 const project: Project = {
   id: 'proj-1',
   path: '/tmp/testproj',
+  name: 'testproj',
+  vision: '',
+  repos: [
+    {
+      id: 'repo-1',
+      name: 'testproj',
+      path: '/tmp/testproj',
+      origin: 'local',
+      status: 'ready',
+      addedAt: new Date().toISOString(),
+    },
+  ],
   addedAt: new Date().toISOString(),
 };
 
@@ -451,5 +463,101 @@ describe('toolbox assignment resolution', () => {
     // Unassigned stages still get an (empty) payload — deny by default.
     const codeCall = mockRun.mock.calls[1]![0];
     expect(codeCall.tools).toEqual({ skills: [], mcpServers: [] });
+  });
+
+  it('unions project-level assignments with stage assignments (deduped)', async () => {
+    const now = new Date().toISOString();
+    await store.update('toolbox', {
+      skills: [
+        {
+          id: 'skill-project',
+          name: 'project-skill',
+          description: 'Everywhere',
+          body: '# P',
+          tags: [],
+          source: 'user',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'skill-stage',
+          name: 'stage-skill',
+          description: 'Spec only',
+          body: '# S',
+          tags: [],
+          source: 'user',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      mcpServers: [
+        {
+          id: 'mcp-project',
+          name: 'project-server',
+          transport: { type: 'stdio', command: 'npx' },
+          tags: [],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    });
+    await store.update('projects', [
+      {
+        ...project,
+        skills: ['skill-project', 'skill-stage'], // skill-stage also assigned on spec -> dedupe
+        mcpServers: ['mcp-project'],
+      },
+    ]);
+    await store.update('pipelines', [
+      openPipeline((c) => {
+        c.stages.spec.skills = ['skill-stage'];
+      }),
+    ]);
+    mockRun.mockResolvedValue(okResult());
+
+    await runner.enqueue({ projectId: project.id, request: 'union run', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    const specCall = mockRun.mock.calls[0]![0];
+    expect(specCall.tools?.skills.map((s) => s.name).sort()).toEqual([
+      'project-skill',
+      'stage-skill',
+    ]);
+    expect(specCall.tools?.skills).toHaveLength(2); // deduped, not doubled
+    expect(specCall.tools?.mcpServers.map((m) => m.name)).toEqual(['project-server']);
+    // A stage with no assignments of its own still inherits project tools.
+    const codeCall = mockRun.mock.calls[1]![0];
+    expect(codeCall.tools?.skills.map((s) => s.name)).toEqual(['project-skill', 'stage-skill']);
+    expect(codeCall.tools?.mcpServers.map((m) => m.name)).toEqual(['project-server']);
+  });
+
+  it('prepends the project vision/context preamble to every stage prompt', async () => {
+    await store.update('projects', [
+      { ...project, vision: 'Build the best widget.', context: 'Use pnpm.' },
+    ]);
+    await store.update('pipelines', [openPipeline()]);
+    mockRun.mockResolvedValue(okResult());
+
+    await runner.enqueue({ projectId: project.id, request: 'preamble run', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    for (const call of mockRun.mock.calls) {
+      const prompt = call[0].prompt;
+      expect(prompt.startsWith('# Project: testproj')).toBe(true);
+      expect(prompt).toContain('## Vision\n\nBuild the best widget.');
+      expect(prompt).toContain('## Project context\n\nUse pnpm.');
+      expect(call[0].cwd).toBe(project.path);
+    }
+  });
+
+  it('omits the preamble entirely for migrated projects with no vision or context', async () => {
+    await store.update('pipelines', [openPipeline()]);
+    mockRun.mockResolvedValue(okResult());
+
+    await runner.enqueue({ projectId: project.id, request: 'no preamble', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    const prompt = mockRun.mock.calls[0]![0].prompt;
+    expect(prompt.startsWith('# Project:')).toBe(false);
   });
 });

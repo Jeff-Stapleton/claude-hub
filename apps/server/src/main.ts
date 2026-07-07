@@ -15,9 +15,11 @@ import { mkdir } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import { GitJobRunner } from './git/jobs.js';
 import { registerActivityRoutes } from './routes/activity.js';
 import { registerChannelRoutes } from './routes/channels.js';
 import { registerConfigRoutes } from './routes/config.js';
+import { registerGitRoutes } from './routes/git.js';
 import { registerOrchestratorRoutes } from './routes/orchestrator.js';
 import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerProjectRoutes } from './routes/projects.js';
@@ -89,6 +91,11 @@ async function main(): Promise<void> {
   await pipelineRunner.recover();
   monitorScheduler.start();
 
+  // Repo provisioning jobs don't survive a restart; land any in-flight
+  // repos on `failed` so the UI offers a retry.
+  const gitJobs = new GitJobRunner(store);
+  await gitJobs.recover();
+
   // Orchestrator: write MCP configs once, set up the workdir, wire a
   // per-DM handler. Uses approach (B) — per-message CLI print runs — so
   // nothing here needs a long-lived agent subprocess.
@@ -159,7 +166,8 @@ async function main(): Promise<void> {
   await registerWs(app, store, ccReader, ccWatcher, channels);
   await registerStateRoutes(app, store, ccReader, channels);
   await registerConfigRoutes(app, store);
-  await registerProjectRoutes(app, store, agentRunner);
+  await registerProjectRoutes(app, store, agentRunner, gitJobs);
+  await registerGitRoutes(app, store);
   await registerTriggerRoutes(app, store, triggerRunner);
   await registerPipelineRoutes(app, store, pipelineRunner);
   await registerChannelRoutes(app, store);

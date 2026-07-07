@@ -114,6 +114,20 @@ export function floorDepth(laneCount: number): number {
   return APRON_D + Math.max(1, laneCount) * LANE_D + BACK_MARGIN;
 }
 
+/** The ghost project lane sits in the band after the last real lane. */
+export function ghostLaneY(projectCount: number): number {
+  return laneY(projectCount);
+}
+
+/**
+ * Workshop floor depth including the ghost lane's band, so the ghost is
+ * always inside the room — creating a project grows the room and the next
+ * ghost appears in the new space.
+ */
+export function workshopFloorDepth(projectCount: number): number {
+  return floorDepth(projectCount + 1);
+}
+
 export function stageIndex(stage: PipelineStageId): number {
   const idx = PIPELINE_STAGE_ORDER.indexOf(stage);
   return idx >= 0 ? idx : 0;

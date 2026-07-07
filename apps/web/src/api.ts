@@ -4,11 +4,44 @@ import type {
   McpTransportInput,
   PipelineConfig,
   Project,
+  ProjectRepo,
+  RedactedGitCredential,
   ToolboxMcpServer,
   ToolboxSkill,
   UIState,
   WorkItem,
 } from './types.js';
+
+/** One repo entry in a create-project / add-repo request. */
+export type RepoInput =
+  | { mode: 'local'; path: string }
+  | { mode: 'clone'; url: string; name?: string; credentialId?: string }
+  | { mode: 'create'; name: string; credentialId: string; private?: boolean };
+
+export interface CreateProjectBody {
+  name: string;
+  vision: string;
+  repos: RepoInput[];
+  context?: string;
+  skills?: string[];
+  mcpServers?: string[];
+  rootPath?: string;
+}
+
+export interface UpdateProjectBody {
+  name?: string;
+  vision?: string;
+  context?: string;
+  skills?: string[];
+  mcpServers?: string[];
+}
+
+export interface PathInspection {
+  exists: boolean;
+  isDirectory: boolean;
+  isGitRepo: boolean;
+  remoteUrl?: string;
+}
 
 export interface SkillBody {
   name: string;
@@ -86,10 +119,47 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(body),
     }),
-  addProject: (body: { path: string; alias?: string }) =>
+  createProject: (body: CreateProjectBody) =>
     req<Project>('/api/projects', { method: 'POST', body: JSON.stringify(body) }),
+  updateProject: (id: string, body: UpdateProjectBody) =>
+    req<Project>(`/api/projects/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
   deleteProject: (id: string) =>
     req<{ ok: true }>(`/api/projects/${encodeURIComponent(id)}`, { method: 'DELETE' }),
+  addRepo: (projectId: string, body: RepoInput) =>
+    req<ProjectRepo>(`/api/projects/${encodeURIComponent(projectId)}/repos`, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  retryRepo: (projectId: string, repoId: string) =>
+    req<{ ok: true }>(
+      `/api/projects/${encodeURIComponent(projectId)}/repos/${encodeURIComponent(repoId)}/retry`,
+      { method: 'POST', body: '{}' },
+    ),
+  deleteRepo: (projectId: string, repoId: string) =>
+    req<{ ok: true }>(
+      `/api/projects/${encodeURIComponent(projectId)}/repos/${encodeURIComponent(repoId)}`,
+      { method: 'DELETE' },
+    ),
+  inspectPath: (path: string) =>
+    req<PathInspection>('/api/git/inspect-path', {
+      method: 'POST',
+      body: JSON.stringify({ path }),
+    }),
+  checkRemote: (url: string, credentialId?: string) =>
+    req<{ ok: boolean; error?: string }>('/api/git/check-remote', {
+      method: 'POST',
+      body: JSON.stringify({ url, ...(credentialId ? { credentialId } : {}) }),
+    }),
+  createGitCredential: (body: { name: string; token: string }) =>
+    req<RedactedGitCredential>('/api/git/credentials', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  deleteGitCredential: (id: string) =>
+    req<{ ok: true }>(`/api/git/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   createCronTrigger: (body: {
     name: string;
     projectId: string;

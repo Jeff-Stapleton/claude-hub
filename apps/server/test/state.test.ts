@@ -110,5 +110,28 @@ describe('buildUIState', () => {
     expect(state.channels).toEqual([]);
     expect(state.triggers).toEqual([]);
     expect(state.orchestrator.status).toBe('stopped');
+    expect(state.gitCredentials).toEqual([]);
+  });
+
+  it('redacts git credential tokens to tokenSet: true', async () => {
+    await store.update('gitCredentials', [
+      {
+        id: 'cred-1',
+        name: 'github-personal',
+        provider: 'github' as const,
+        token: 'GHP_VERY_SECRET_PAT_XYZ',
+        createdAt: new Date().toISOString(),
+      },
+    ]);
+
+    const state = await buildUIState(store, ccReader);
+    expect(state.gitCredentials[0]).toMatchObject({
+      id: 'cred-1',
+      name: 'github-personal',
+      provider: 'github',
+      tokenSet: true,
+    });
+    const json = JSON.stringify(state);
+    expect(json).not.toContain('GHP_VERY_SECRET_PAT_XYZ');
   });
 });

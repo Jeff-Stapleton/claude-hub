@@ -43,6 +43,7 @@ export function ProjectLane({
   onSelectItem,
   onOpenIntake,
   onOpenAddStage,
+  onOpenSettings,
   onRemove,
 }: {
   project: Project;
@@ -57,12 +58,13 @@ export function ProjectLane({
   onSelectItem: (itemId: string) => void;
   onOpenIntake: () => void;
   onOpenAddStage: () => void;
+  onOpenSettings: () => void;
   onRemove: () => void;
 }): JSX.Element {
   const y0 = laneY(laneIndex);
   const beltY = y0 + BELT_LOCAL_Y;
   const slotY = y0 + SLOT_LOCAL_Y;
-  const label = project.alias ?? basename(project.path);
+  const label = project.name;
   const stageActivity = deriveStageActivity(items);
   const anythingRunning = items.some((it) => it.status === 'running');
   const ghostIndex = ghostSlotIndex(config.stages);
@@ -89,6 +91,7 @@ export function ProjectLane({
           anythingRunning={anythingRunning}
           removing={removing}
           onOpenIntake={onOpenIntake}
+          onOpenSettings={onOpenSettings}
           onRemove={onRemove}
         />
       ),
@@ -178,10 +181,4 @@ export function ProjectLane({
       ) : null}
     </g>
   );
-}
-
-function basename(path: string): string {
-  const norm = path.replace(/[\\/]+$/, '');
-  const idx = Math.max(norm.lastIndexOf('/'), norm.lastIndexOf('\\'));
-  return idx >= 0 ? norm.slice(idx + 1) : norm;
 }

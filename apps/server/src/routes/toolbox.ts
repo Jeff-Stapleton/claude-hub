@@ -163,12 +163,30 @@ function guardMutable(reply: FastifyReply, skill: ToolboxSkill | undefined): unk
   return undefined;
 }
 
-/** Removes a deleted tool id from every stored pipeline stage assignment. */
+/**
+ * Removes a deleted tool id from every stored pipeline stage assignment and
+ * from every project-level assignment.
+ */
 async function scrubAssignments(
   store: Store,
   field: 'skills' | 'mcpServers',
   toolId: string,
 ): Promise<void> {
+  const projectsAffected = store.projects().some((p) => p[field]?.includes(toolId));
+  if (projectsAffected) {
+    await store.update('projects', (current) =>
+      current.map((project) => {
+        const ids = project[field];
+        if (!ids?.includes(toolId)) return project;
+        const remaining = ids.filter((id) => id !== toolId);
+        const next = { ...project };
+        if (remaining.length > 0) next[field] = remaining;
+        else delete next[field];
+        return next;
+      }),
+    );
+  }
+
   const affected = store
     .pipelines()
     .some((p) => Object.values(p.stages).some((s) => s[field]?.includes(toolId)));

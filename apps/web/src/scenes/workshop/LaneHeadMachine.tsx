@@ -6,8 +6,10 @@ import { Workstation } from './Workstation.jsx';
 
 /**
  * The project's head machine at the left end of its lane: nameplate,
- * trigger-activity screen, session badge, and the remove button. Clicking
- * the body opens the lane's work-request intake form.
+ * trigger-activity screen, session badge, and the remove + settings
+ * buttons. Clicking the body opens the lane's work-request intake form;
+ * the gear opens project settings. While any repo is provisioning or
+ * failed, the screen reflects that instead of trigger activity.
  */
 export function LaneHeadMachine({
   project,
@@ -18,6 +20,7 @@ export function LaneHeadMachine({
   anythingRunning,
   removing,
   onOpenIntake,
+  onOpenSettings,
   onRemove,
 }: {
   project: Project;
@@ -29,25 +32,43 @@ export function LaneHeadMachine({
   anythingRunning: boolean;
   removing: boolean;
   onOpenIntake: () => void;
+  onOpenSettings: () => void;
   onRemove: () => void;
 }): JSX.Element {
   const palette = palettes[variant % palettes.length]!;
   const latest = activity[0]?.run.status;
   const active = latest === 'running' || anythingRunning;
-  const label = project.alias ?? basename(project.path);
+  const label = project.name;
   const sessionCount = project.agentSessions.reduce((sum, session) => sum + session.sessionCount, 0);
   const { topFace, rightFace, leftFace } = isoBoxPoints(x, y, HEAD_W, HEAD_D, HEAD_H);
+  const repos = project.repos ?? [];
+  const repoFailed = repos.some((r) => r.status === 'failed');
+  const repoBusy = repos.some(
+    (r) => r.status === 'pending' || r.status === 'cloning' || r.status === 'creating' || r.status === 'pushing',
+  );
+  const screenStatus: TriggerRunStatus | undefined = repoFailed
+    ? 'error'
+    : repoBusy
+      ? 'running'
+      : latest;
 
   return (
     <Workstation label={`${label} — new work request`} onActivate={onOpenIntake}>
-      <g style={active ? machinePulseStyle : undefined}>
+      <g style={active || repoBusy ? machinePulseStyle : undefined}>
         <polygon points={poly(...leftFace)} fill={palette.left} stroke="#15100c" strokeWidth={1} />
         <polygon points={poly(...rightFace)} fill={palette.right} stroke="#15100c" strokeWidth={1} />
         <polygon points={poly(...topFace)} fill={palette.top} stroke="#15100c" strokeWidth={1.4} />
 
-        <MachineScreen x={x} y={y} width={HEAD_W} height={HEAD_H} status={latest} />
+        <MachineScreen x={x} y={y} width={HEAD_W} height={HEAD_H} status={screenStatus} />
         <MachineLabel x={x + HEAD_W / 2} y={y + HEAD_D / 2} z={HEAD_H + 0.45} label={label} />
         <SessionBadge x={x + HEAD_W - 0.2} y={y + HEAD_D - 0.1} z={HEAD_H + 0.1} count={sessionCount} />
+        <SettingsButton
+          x={x + HEAD_W - 0.55}
+          y={y - 0.05}
+          z={HEAD_H + 0.35}
+          label={label}
+          onOpen={onOpenSettings}
+        />
         <RemoveButton
           x={x + HEAD_W - 0.1}
           y={y - 0.05}
@@ -165,10 +186,43 @@ function RemoveButton({
   );
 }
 
-function basename(path: string): string {
-  const norm = path.replace(/[\\/]+$/, '');
-  const idx = Math.max(norm.lastIndexOf('/'), norm.lastIndexOf('\\'));
-  return idx >= 0 ? norm.slice(idx + 1) : norm;
+function SettingsButton({
+  x,
+  y,
+  z,
+  label,
+  onOpen,
+}: {
+  x: number;
+  y: number;
+  z: number;
+  label: string;
+  onOpen: () => void;
+}): JSX.Element {
+  const c = iso(x, y, z);
+  return (
+    <g
+      role="button"
+      tabIndex={0}
+      aria-label={`${label} project settings`}
+      onClick={(event) => {
+        event.stopPropagation();
+        onOpen();
+      }}
+      onKeyDown={(event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        event.preventDefault();
+        event.stopPropagation();
+        onOpen();
+      }}
+      style={{ cursor: 'pointer' }}
+    >
+      <circle cx={c.x} cy={c.y} r={11} fill="#3a3324" stroke="#1a140a" strokeWidth={1.2} />
+      <text x={c.x} y={c.y + 4} textAnchor="middle" fontSize={11} fill="#e8d8a8">
+        ⚙
+      </text>
+    </g>
+  );
 }
 
 function shorten(value: string, max: number): string {

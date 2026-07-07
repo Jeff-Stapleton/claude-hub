@@ -214,12 +214,13 @@ export function StationConfigPanel({
 }
 
 /**
- * Per-machine tool assignment: a tag-filterable checkbox list over the
- * toolbox catalog. Machines get no tools unless checked here — that keeps
- * agents away from tools they shouldn't touch and out of context they
- * don't need.
+ * Tool assignment: a tag-filterable checkbox list over the toolbox
+ * catalog. Nothing is granted unless checked here — that keeps agents away
+ * from tools they shouldn't touch and out of context they don't need.
+ * Shared with the project wizard/settings, where the same list assigns
+ * project-level tools every machine in the lane inherits.
  */
-function ToolPicker({
+export function ToolPicker({
   toolbox,
   selectedSkills,
   selectedServers,

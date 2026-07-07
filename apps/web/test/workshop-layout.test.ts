@@ -25,12 +25,14 @@ import {
   defaultPipeline,
   floorDepth,
   gateX,
+  ghostLaneY,
   ghostSlotIndex,
   itemSlot,
   laneY,
   sceneTransform,
   slotX,
   toolboxY,
+  workshopFloorDepth,
 } from '../src/scenes/workshop/layout.js';
 import { PIPELINE_STAGE_ORDER } from '../src/types.js';
 
@@ -182,6 +184,26 @@ describe('workshop lane layout', () => {
     // little smaller than it was when machines sat beside the belt.
     const { s } = sceneTransform(FLOOR_W, floorDepth(1));
     expect(s).toBeGreaterThan(0.8);
+  });
+
+  it('reserves a lane band for the ghost project lane inside the room', () => {
+    for (const n of [0, 1, 3, 9]) {
+      // The ghost occupies the band right after the last real lane…
+      expect(ghostLaneY(n)).toBe(laneY(n));
+      // …and the workshop floor is deep enough to contain it.
+      expect(workshopFloorDepth(n)).toBe(floorDepth(n + 1));
+      expect(ghostLaneY(n) + LANE_D).toBeLessThanOrEqual(workshopFloorDepth(n) - BACK_MARGIN + 1e-9);
+      // The back-wall console band stays clear of the ghost lane.
+      expect(consoleY(workshopFloorDepth(n))).toBeGreaterThanOrEqual(ghostLaneY(n) + LANE_D - 1e-9);
+    }
+  });
+
+  it('scale-to-fit still holds with the ghost band included', () => {
+    for (const n of [0, 1, 3, 9]) {
+      const { s } = sceneTransform(FLOOR_W, workshopFloorDepth(n));
+      expect(s).toBeGreaterThan(0);
+      expect(s).toBeLessThanOrEqual(1);
+    }
   });
 
   it('default pipeline mirrors the server defaults (blank line: all disabled)', () => {

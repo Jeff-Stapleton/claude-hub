@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { api } from '../api.js';
+import { api, type CreateProjectBody, type RepoInput, type UpdateProjectBody } from '../api.js';
 import type { PipelineStageId, StageConfig, UIState } from '../types.js';
 import { PIPELINE_STAGE_ORDER } from '../types.js';
 import { DepthSorted, iso, poly, WALL_H, type SceneEntity } from './iso.js';
@@ -10,20 +10,25 @@ import { ChannelsRadio } from './workshop/ChannelsRadio.jsx';
 import { CronClockWall } from './workshop/CronClockWall.jsx';
 import { DebugOverlay } from './workshop/DebugOverlay.jsx';
 import { ExitChute } from './workshop/ExitChute.jsx';
+import { GhostLane } from './workshop/GhostLane.jsx';
 import {
   BELT_LOCAL_Y,
   CONSOLE_X,
   FLOOR_W,
+  HEAD_X,
   TOOLBOX_X,
   consoleY,
   defaultPipeline,
-  floorDepth,
+  ghostLaneY,
   laneY,
   sceneTransform,
   toolboxY,
+  workshopFloorDepth,
 } from './workshop/layout.js';
+import { NewProjectWizard } from './workshop/NewProjectWizard.jsx';
 import { OrchestratorConsole } from './workshop/OrchestratorConsole.jsx';
 import { ProjectLane } from './workshop/ProjectLane.jsx';
+import { ProjectSettingsPanel } from './workshop/ProjectSettingsPanel.jsx';
 import { RequestIntakeForm } from './workshop/RequestIntakeForm.jsx';
 import { StationConfigPanel } from './workshop/StationConfigPanel.jsx';
 import { TimeCardWall } from './workshop/TimeCardWall.jsx';
@@ -51,6 +56,8 @@ type WorkshopSelection =
   | { kind: 'intake'; projectId: string }
   | { kind: 'addStage'; projectId: string }
   | { kind: 'toolbox' }
+  | { kind: 'newProject' }
+  | { kind: 'projectSettings'; projectId: string }
   | null;
 
 const EMPTY_TOOLBOX = { skills: [], mcpServers: [] };
@@ -63,8 +70,6 @@ export function Workshop({
   navigate: (s: SceneId, param?: string) => void;
 }): JSX.Element {
   const qc = useQueryClient();
-  const [path, setPath] = useState('');
-  const [alias, setAlias] = useState('');
   const [selection, setSelection] = useState<WorkshopSelection>(null);
 
   const activityQuery = useQuery({
@@ -73,13 +78,32 @@ export function Workshop({
     refetchInterval: 10_000,
   });
 
-  const addMutation = useMutation({
-    mutationFn: api.addProject,
+  const createProjectMutation = useMutation({
+    mutationFn: (body: CreateProjectBody) => api.createProject(body),
     onSuccess: () => {
-      setPath('');
-      setAlias('');
+      setSelection(null);
       void qc.invalidateQueries({ queryKey: ['state'] });
     },
+  });
+
+  const updateProjectMutation = useMutation({
+    mutationFn: ({ projectId, body }: { projectId: string; body: UpdateProjectBody }) =>
+      api.updateProject(projectId, body),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
+
+  const repoMutation = useMutation({
+    mutationFn: (action: RepoAction): Promise<unknown> => {
+      switch (action.type) {
+        case 'add':
+          return api.addRepo(action.projectId, action.body);
+        case 'retry':
+          return api.retryRepo(action.projectId, action.repoId);
+        case 'delete':
+          return api.deleteRepo(action.projectId, action.repoId);
+      }
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
   });
 
   const deleteMutation = useMutation({
@@ -139,7 +163,9 @@ export function Workshop({
   const workItems = state.workItems ?? [];
 
   const floorW = FLOOR_W;
-  const floorD = floorDepth(projects.length);
+  // Depth includes the ghost lane's band, so the "add project" ghost always
+  // sits inside the room and each new project grows the floor along +Y.
+  const floorD = workshopFloorDepth(projects.length);
   const { s: sceneScale, tx, ty } = sceneTransform(floorW, floorD);
 
   // Recent trigger runs per project, for each lane's head-machine screen.
@@ -159,7 +185,7 @@ export function Workshop({
     state.pipelines?.find((p) => p.projectId === projectId) ?? defaultPipeline(projectId);
   const labelFor = (projectId: string): string => {
     const project = projects.find((p) => p.id === projectId);
-    return project ? project.alias ?? basename(project.path) : projectId;
+    return project ? project.name : projectId;
   };
   const toggle = (next: Exclude<WorkshopSelection, null>): void =>
     setSelection((current) => (JSON.stringify(current) === JSON.stringify(next) ? null : next));
@@ -196,10 +222,18 @@ export function Workshop({
         onSelectItem={(itemId) => toggle({ kind: 'item', itemId })}
         onOpenIntake={() => toggle({ kind: 'intake', projectId: project.id })}
         onOpenAddStage={() => toggle({ kind: 'addStage', projectId: project.id })}
+        onOpenSettings={() => toggle({ kind: 'projectSettings', projectId: project.id })}
         onRemove={() => deleteMutation.mutate(project.id)}
       />
     ),
   }));
+  entities.push({
+    key: 'ghost-lane',
+    anchor: { x: HEAD_X, y: ghostLaneY(projects.length) },
+    node: (
+      <GhostLane y0={ghostLaneY(projects.length)} onActivate={() => toggle({ kind: 'newProject' })} />
+    ),
+  });
   entities.push({
     key: 'orchestrator',
     anchor: { x: CONSOLE_X, y: consoleY(floorD) },
@@ -279,10 +313,6 @@ export function Workshop({
         {/* Floor-standing objects in enforced back-to-front paint order. */}
         <DepthSorted entities={entities} />
 
-        {projects.length === 0 ? (
-          <EmptyFloorHint floorW={floorW} floorD={floorD} />
-        ) : null}
-
         {import.meta.env.DEV ? <DebugOverlay floorW={floorW} floorD={floorD} /> : null}
       </g>
 
@@ -354,22 +384,40 @@ export function Workshop({
           onClose={() => setSelection(null)}
         />
       ) : null}
-
-      <ProjectAddPanel
-        path={path}
-        alias={alias}
-        error={addMutation.error}
-        isPending={addMutation.isPending}
-        onPathChange={setPath}
-        onAliasChange={setAlias}
-        onSubmit={() => {
-          if (!path.trim()) return;
-          addMutation.mutate({
-            path: path.trim(),
-            ...(alias.trim() ? { alias: alias.trim() } : {}),
-          });
-        }}
-      />
+      {selected?.kind === 'newProject' ? (
+        <NewProjectWizard
+          toolbox={toolbox}
+          credentials={state.gitCredentials ?? []}
+          projectsRoot={state.config.projectsRoot}
+          isPending={createProjectMutation.isPending}
+          error={createProjectMutation.error}
+          onCreate={(body) => createProjectMutation.mutate(body)}
+          onClose={() => setSelection(null)}
+        />
+      ) : null}
+      {selected?.kind === 'projectSettings' && selected.project ? (
+        <ProjectSettingsPanel
+          key={selected.projectId}
+          project={selected.project}
+          toolbox={toolbox}
+          credentials={state.gitCredentials ?? []}
+          isPending={updateProjectMutation.isPending || repoMutation.isPending}
+          error={updateProjectMutation.error ?? repoMutation.error}
+          onSave={(body) =>
+            updateProjectMutation.mutate({ projectId: selected.projectId, body })
+          }
+          onAddRepo={(body) =>
+            repoMutation.mutate({ type: 'add', projectId: selected.projectId, body })
+          }
+          onRetryRepo={(repoId) =>
+            repoMutation.mutate({ type: 'retry', projectId: selected.projectId, repoId })
+          }
+          onDeleteRepo={(repoId) =>
+            repoMutation.mutate({ type: 'delete', projectId: selected.projectId, repoId })
+          }
+          onClose={() => setSelection(null)}
+        />
+      ) : null}
 
       {/* Warm lamp glow overlay (non-interactive) */}
       <rect x={0} y={0} width={1600} height={900} fill="url(#lampGlow)" pointerEvents="none" />
@@ -391,87 +439,33 @@ export function Workshop({
   );
 }
 
+type RepoAction =
+  | { type: 'add'; projectId: string; body: RepoInput }
+  | { type: 'retry'; projectId: string; repoId: string }
+  | { type: 'delete'; projectId: string; repoId: string };
+
 type ValidatedSelection =
   | { kind: 'stage'; projectId: string; stage: PipelineStageId }
   | { kind: 'item'; itemId: string; item: NonNullable<UIState['workItems']>[number] }
   | { kind: 'intake'; projectId: string }
   | { kind: 'addStage'; projectId: string }
   | { kind: 'toolbox' }
+  | { kind: 'newProject' }
+  | { kind: 'projectSettings'; projectId: string; project: UIState['projects'][number] }
   | null;
 
 function validateSelection(selection: WorkshopSelection, state: UIState): ValidatedSelection {
   if (!selection) return null;
-  if (selection.kind === 'toolbox') return selection;
+  if (selection.kind === 'toolbox' || selection.kind === 'newProject') return selection;
   if (selection.kind === 'item') {
     const item = (state.workItems ?? []).find((it) => it.id === selection.itemId);
     return item ? { ...selection, item } : null;
   }
+  if (selection.kind === 'projectSettings') {
+    const project = state.projects.find((p) => p.id === selection.projectId);
+    return project ? { ...selection, project } : null;
+  }
   return state.projects.some((p) => p.id === selection.projectId) ? selection : null;
-}
-
-function EmptyFloorHint({ floorW, floorD }: { floorW: number; floorD: number }): JSX.Element {
-  const c = iso(floorW / 2, floorD / 2, 0.35);
-  return (
-    <text
-      x={c.x}
-      y={c.y}
-      textAnchor="middle"
-      fontSize={13}
-      fill="#c8a888"
-      opacity={0.7}
-      fontStyle="italic"
-    >
-      add a project to build its assembly line
-    </text>
-  );
-}
-
-function ProjectAddPanel({
-  path,
-  alias,
-  error,
-  isPending,
-  onPathChange,
-  onAliasChange,
-  onSubmit,
-}: {
-  path: string;
-  alias: string;
-  error: unknown;
-  isPending: boolean;
-  onPathChange: (value: string) => void;
-  onAliasChange: (value: string) => void;
-  onSubmit: () => void;
-}): JSX.Element {
-  return (
-    <foreignObject x={36} y={650} width={430} height={210}>
-      <form
-        onSubmit={(event) => {
-          event.preventDefault();
-          onSubmit();
-        }}
-        style={addPanel}
-      >
-        <div style={addPanelTitle}>Add project machine</div>
-        <input
-          placeholder="Absolute project path"
-          value={path}
-          onChange={(event) => onPathChange(event.target.value)}
-          style={addPanelInput}
-        />
-        <input
-          placeholder="Alias (optional)"
-          value={alias}
-          onChange={(event) => onAliasChange(event.target.value)}
-          style={addPanelInput}
-        />
-        <button type="submit" disabled={isPending || !path.trim()} style={addPanelButton}>
-          {isPending ? 'Building...' : 'Build machine'}
-        </button>
-        {error ? <div style={addPanelError}>{String(error)}</div> : null}
-      </form>
-    </foreignObject>
-  );
 }
 
 /** Floor rhombus + faint tile grid, sized to the current room. */
@@ -557,55 +551,3 @@ function Walls({ floorW, floorD }: { floorW: number; floorD: number }): JSX.Elem
   );
 }
 
-function basename(path: string): string {
-  const norm = path.replace(/[\\/]+$/, '');
-  const idx = Math.max(norm.lastIndexOf('/'), norm.lastIndexOf('\\'));
-  return idx >= 0 ? norm.slice(idx + 1) : norm;
-}
-
-const addPanel: React.CSSProperties = {
-  boxSizing: 'border-box',
-  width: '100%',
-  height: '100%',
-  padding: 14,
-  border: '1px solid #4a3624',
-  borderRadius: 10,
-  background: 'rgba(24, 16, 10, 0.88)',
-  color: '#ead6b8',
-  display: 'flex',
-  flexDirection: 'column',
-  gap: 8,
-  boxShadow: '0 8px 22px rgba(0, 0, 0, 0.35)',
-};
-
-const addPanelTitle: React.CSSProperties = {
-  fontSize: 14,
-  fontWeight: 600,
-  color: '#f0d8b8',
-};
-
-const addPanelInput: React.CSSProperties = {
-  minWidth: 0,
-  padding: '7px 9px',
-  borderRadius: 5,
-  border: '1px solid #5a3a22',
-  background: '#100b08',
-  color: '#eee',
-  fontSize: 12,
-};
-
-const addPanelButton: React.CSSProperties = {
-  alignSelf: 'flex-start',
-  padding: '6px 12px',
-  borderRadius: 5,
-  border: '1px solid #6a4a2a',
-  background: '#4a3020',
-  color: '#f0d8b8',
-  cursor: 'pointer',
-  fontSize: 12,
-};
-
-const addPanelError: React.CSSProperties = {
-  color: '#ff9a8a',
-  fontSize: 11,
-};

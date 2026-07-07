@@ -1,12 +1,15 @@
+import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { homedir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 import { HubPaths } from './paths.js';
 import {
   type AgentProviderConfigs,
   STORE_SCHEMA_VERSION,
   type AppConfig,
   type Channel,
+  type GitCredential,
   type OrchestratorState,
   type PipelineConfig,
   type Project,
@@ -23,6 +26,7 @@ const DEFAULT_CONFIG: AppConfig = {
   orchestratorTimeoutMs: 4 * 60 * 60 * 1000, // 4 hours
   triggerTimeoutMs: 4 * 60 * 60 * 1000, // 4 hours
   defaultProvider: 'claude',
+  projectsRoot: join(homedir(), 'claude-hub', 'projects'),
   providers: {
     claude: {
       type: 'claude',
@@ -61,6 +65,7 @@ function emptySnapshot(): StoreSnapshot {
     pipelines: [],
     workItems: [],
     toolbox: { skills: [], mcpServers: [] },
+    gitCredentials: [],
   };
 }
 
@@ -119,13 +124,27 @@ export class Store extends EventEmitter {
           `expected=${STORE_SCHEMA_VERSION}. Refusing to load to avoid corruption.`,
       );
     }
-    fresh.projects = await readJsonOrDefault(this.paths.file('projects'), fresh.projects);
+    const rawProjects = await readJsonOrDefault<LegacyOrCurrentProject[]>(
+      this.paths.file('projects'),
+      [],
+    );
+    const { projects, migrated } = migrateLegacyProjects(rawProjects);
+    fresh.projects = projects;
+    if (migrated) {
+      // Persist the v4 -> v5 shape once, up front, so a crash before the
+      // first organic write can't leave the file behind the schema version.
+      await writeJsonAtomic(this.paths.file('projects'), projects);
+    }
     fresh.channels = await readJsonOrDefault(this.paths.file('channels'), fresh.channels);
     fresh.triggers = await readJsonOrDefault(this.paths.file('triggers'), fresh.triggers);
     fresh.orchestrator = await readJsonOrDefault(this.paths.file('orchestrator'), fresh.orchestrator);
     fresh.pipelines = await readJsonOrDefault(this.paths.file('pipelines'), fresh.pipelines);
     fresh.workItems = await readJsonOrDefault(this.paths.file('workItems'), fresh.workItems);
     fresh.toolbox = await readJsonOrDefault(this.paths.file('toolbox'), fresh.toolbox);
+    fresh.gitCredentials = await readJsonOrDefault(
+      this.paths.file('gitCredentials'),
+      fresh.gitCredentials,
+    );
 
     this.snapshot = fresh;
     this.loaded = true;
@@ -168,6 +187,10 @@ export class Store extends EventEmitter {
 
   toolbox(): Toolbox {
     return this.get().toolbox;
+  }
+
+  gitCredentials(): GitCredential[] {
+    return this.get().gitCredentials;
   }
 
   // -- writes ---------------------------------------------------------------
@@ -247,6 +270,52 @@ function isNodeError(err: unknown): err is NodeJS.ErrnoException {
   return err instanceof Error && 'code' in err;
 }
 
+/** Pre-v5 project shape: a bare working directory with an optional alias. */
+interface LegacyProject {
+  id: string;
+  path: string;
+  alias?: string;
+  addedAt: string;
+}
+
+type LegacyOrCurrentProject = LegacyProject | Project;
+
+/**
+ * v4 -> v5: a project used to be a single working directory. It becomes a
+ * project root with one implicit local repo pointing at that same path, so
+ * nothing moves on disk and agent cwd is unchanged.
+ */
+function migrateLegacyProjects(raw: LegacyOrCurrentProject[]): {
+  projects: Project[];
+  migrated: boolean;
+} {
+  let migrated = false;
+  const projects = raw.map((p): Project => {
+    if ('repos' in p && Array.isArray(p.repos)) return p;
+    migrated = true;
+    const legacy = p as LegacyProject;
+    const name = legacy.alias ?? basename(legacy.path);
+    return {
+      id: legacy.id,
+      path: legacy.path,
+      name,
+      vision: '',
+      repos: [
+        {
+          id: randomUUID(),
+          name: basename(legacy.path),
+          path: legacy.path,
+          origin: 'local',
+          status: 'ready',
+          addedAt: legacy.addedAt,
+        },
+      ],
+      addedAt: legacy.addedAt,
+    };
+  });
+  return { projects, migrated };
+}
+
 function mergeConfigDefaults(persisted: Partial<AppConfig>): AppConfig {
   const rawProviders = (persisted.providers ?? {}) as Partial<AgentProviderConfigs>;
   const config: AppConfig = {
@@ -254,11 +323,14 @@ function mergeConfigDefaults(persisted: Partial<AppConfig>): AppConfig {
     ...persisted,
     // v1 -> v2 -> v3 -> v4 are purely additive (new files default to [], new
     // optional fields back-filled here), so older stores coerce forward.
+    // v4 -> v5 additionally reshapes projects, handled by
+    // migrateLegacyProjects during load.
     schemaVersion:
       persisted.schemaVersion === undefined ||
       persisted.schemaVersion === 1 ||
       persisted.schemaVersion === 2 ||
-      persisted.schemaVersion === 3
+      persisted.schemaVersion === 3 ||
+      persisted.schemaVersion === 4
         ? STORE_SCHEMA_VERSION
         : persisted.schemaVersion,
     defaultProvider: persisted.defaultProvider ?? DEFAULT_CONFIG.defaultProvider,

@@ -12,16 +12,65 @@ export type ISODateString = string;
 // Projects
 // ---------------------------------------------------------------------------
 
+export type GitProvider = 'github';
+
 /**
- * A user-registered working directory. Sessions, skills, and plans in Claude
- * Code are scoped per directory; a Project is just a friendly handle to one.
+ * A hub-level git credential (personal access token), referenced from repos
+ * by id. Like a channel's botToken, the token is stored locally and never
+ * sent to the UI.
+ */
+export interface GitCredential {
+  id: string;
+  /** Friendly label, e.g. "github-personal". */
+  name: string;
+  provider: GitProvider;
+  /** PAT/token. Stored locally; never sent to the UI. */
+  token: string;
+  createdAt: ISODateString;
+}
+
+export type RepoOrigin = 'local' | 'clone' | 'create';
+
+/**
+ * Provisioning lifecycle for a repo. `local` repos are born `ready`; clone
+ * and create repos start `pending` and are advanced by the server's git job
+ * runner, with each transition persisted so the UI sees live progress.
+ */
+export type RepoStatus = 'pending' | 'cloning' | 'creating' | 'pushing' | 'ready' | 'failed';
+
+export interface ProjectRepo {
+  id: string;
+  /** Dir-safe name; the subdirectory under the project root for clone/create repos. */
+  name: string;
+  /** Absolute path to the repo working tree (may sit outside the project root for origin 'local'). */
+  path: string;
+  origin: RepoOrigin;
+  remoteUrl?: string;
+  /** GitCredential used for clone/create/push (private remotes). */
+  credentialId?: string;
+  status: RepoStatus;
+  error?: string;
+  addedAt: ISODateString;
+}
+
+/**
+ * A project is a root directory holding one or more git repos as
+ * subdirectories. Agent sessions run at the root so they see every repo.
  */
 export interface Project {
   id: string;
-  /** Absolute filesystem path to the project's working directory. */
+  /** Absolute path to the project root directory; agent sessions run here. */
   path: string;
-  /** Optional friendly name; falls back to the basename of `path`. */
-  alias?: string;
+  name: string;
+  /** High-level guiding statement; injected into every stage prompt. */
+  vision: string;
+  repos: ProjectRepo[];
+  /** Markdown injected into every machine's prompt for this project's runs. */
+  context?: string;
+  /** Toolbox skill ids unioned with each stage's own assignments at runtime. */
+  skills?: string[];
+  /** Toolbox MCP server ids, same union semantics. */
+  mcpServers?: string[];
   addedAt: ISODateString;
 }
 
@@ -379,7 +428,7 @@ export type AgentProviderConfigs = {
  * file lands; the store refuses to load mismatched versions to avoid silent
  * data corruption.
  */
-export const STORE_SCHEMA_VERSION = 4;
+export const STORE_SCHEMA_VERSION = 5;
 
 export interface AppConfig {
   schemaVersion: number;
@@ -402,6 +451,8 @@ export interface AppConfig {
   defaultProvider: AgentProviderId;
   /** Provider-specific CLI settings. */
   providers: AgentProviderConfigs;
+  /** Directory new project roots are created under. Defaults to ~/claude-hub/projects. */
+  projectsRoot: string;
 }
 
 export interface StoreSnapshot {
@@ -414,6 +465,7 @@ export interface StoreSnapshot {
   /** Live work items only (queued/running/waiting/monitoring/failed); terminal items are archived to JSONL. */
   workItems: WorkItem[];
   toolbox: Toolbox;
+  gitCredentials: GitCredential[];
 }
 
 export type StoreEntityKey = keyof StoreSnapshot;

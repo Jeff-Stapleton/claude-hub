@@ -75,7 +75,7 @@ function CronCreateForm({ projects }: { projects: Project[] }): JSX.Element {
           </option>
           {projects.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.alias ?? p.path}
+              {p.name}
             </option>
           ))}
         </select>
@@ -125,7 +125,7 @@ function CronList({
     return <p style={{ opacity: 0.7 }}>No cron triggers.</p>;
   }
 
-  const nameFor = (id: string): string => projects.find((p) => p.id === id)?.alias ?? id;
+  const nameFor = (id: string): string => projects.find((p) => p.id === id)?.name ?? id;
 
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -271,7 +271,7 @@ function WebhookCreateForm({ projects }: { projects: Project[] }): JSX.Element {
             </option>
             {projects.map((p) => (
               <option key={p.id} value={p.id}>
-                {p.alias ?? p.path}
+                {p.name}
               </option>
             ))}
           </select>
@@ -364,7 +364,7 @@ function WebhookList({
   if (webhooks.length === 0) {
     return <p style={{ opacity: 0.7 }}>No webhook triggers.</p>;
   }
-  const nameFor = (id: string): string => projects.find((p) => p.id === id)?.alias ?? id;
+  const nameFor = (id: string): string => projects.find((p) => p.id === id)?.name ?? id;
 
   return (
     <table style={{ width: '100%', borderCollapse: 'collapse' }}>

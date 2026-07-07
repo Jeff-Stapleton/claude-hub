@@ -3,6 +3,7 @@ import {
   render,
   type AgentProviderId,
   type PipelineStageId,
+  type Project,
   type StageConfig,
   type Store,
   type WorkItem,
@@ -52,8 +53,9 @@ export async function executeStage(
   item: WorkItem,
   stageId: PipelineStageId,
   cfg: StageConfig,
-  projectPath: string,
+  project: Project,
 ): Promise<ExecuteStageResult> {
+  const projectPath = project.path;
   const timeoutMs = cfg.timeoutMs ?? deps.defaultTimeoutMs ?? deps.store.config().triggerTimeoutMs;
   const hasCommands = COMMAND_STAGES.has(stageId) && (cfg.commands?.length ?? 0) > 0;
   // Commands-only stations skip the agent run unless a template is set.
@@ -65,7 +67,8 @@ export async function executeStage(
 
   if (runAgent) {
     const template = cfg.promptTemplate ?? DEFAULT_STAGE_TEMPLATES[stageId];
-    prompt = render(template, buildContext(item));
+    const rendered = render(template, buildContext(item));
+    prompt = buildProjectPreamble(project) + rendered;
     const provider = cfg.provider ?? deps.store.config().defaultProvider;
     const sessionId = item.sessions?.[provider];
 
@@ -75,7 +78,7 @@ export async function executeStage(
       prompt,
       ...(sessionId !== undefined ? { sessionId } : {}),
       timeoutMs,
-      tools: resolveToolAssignments(deps.store, stageId, cfg),
+      tools: resolveToolAssignments(deps.store, stageId, cfg, project),
     });
 
     if (!result.ok) {
@@ -122,19 +125,42 @@ export async function executeStage(
 }
 
 /**
- * Resolves a stage's toolbox assignments (ids) to full definitions for the
- * agent runner. Always returns a payload — present-but-empty keeps runs
- * deny-by-default (strict MCP config). Ids whose tool has since been deleted
- * are dropped with a warning rather than failing the stage.
+ * Project name/vision/context rendered ahead of every stage prompt so each
+ * machine works with the project's guiding intent. Provider-agnostic (plain
+ * prompt text), and empty for migrated projects with no vision or context —
+ * those runs behave exactly as before.
+ */
+export function buildProjectPreamble(project: Project): string {
+  // Tolerate pre-v5 shapes (no vision field) that can linger in fixtures
+  // or stores created through the legacy add_project path.
+  const vision = (project.vision ?? '').trim();
+  const context = project.context?.trim() ?? '';
+  if (!vision && !context) return '';
+  const parts = [`# Project: ${project.name}`];
+  if (vision) parts.push(`## Vision\n\n${vision}`);
+  if (context) parts.push(`## Project context\n\n${context}`);
+  return parts.join('\n\n') + '\n\n---\n\n';
+}
+
+/**
+ * Resolves toolbox assignments (ids) to full definitions for the agent
+ * runner: the union of project-level assignments (shared by every machine
+ * in the lane) and the stage's own. Always returns a payload —
+ * present-but-empty keeps runs deny-by-default (strict MCP config). Ids
+ * whose tool has since been deleted are dropped with a warning rather than
+ * failing the stage.
  */
 function resolveToolAssignments(
   store: Store,
   stageId: PipelineStageId,
   cfg: StageConfig,
+  project: Project,
 ): RunToolAssignments {
   const toolbox = store.toolbox();
+  const skillIds = [...new Set([...(project.skills ?? []), ...(cfg.skills ?? [])])];
+  const serverIds = [...new Set([...(project.mcpServers ?? []), ...(cfg.mcpServers ?? [])])];
   const skills: RunToolAssignments['skills'] = [];
-  for (const id of cfg.skills ?? []) {
+  for (const id of skillIds) {
     const skill = toolbox.skills.find((s) => s.id === id);
     if (!skill) {
       console.warn(`[pipeline] stage "${stageId}": assigned skill ${id} no longer exists`);
@@ -143,7 +169,7 @@ function resolveToolAssignments(
     skills.push({ name: skill.name, description: skill.description, body: skill.body });
   }
   const mcpServers: RunToolAssignments['mcpServers'] = [];
-  for (const id of cfg.mcpServers ?? []) {
+  for (const id of serverIds) {
     const server = toolbox.mcpServers.find((m) => m.id === id);
     if (!server) {
       console.warn(`[pipeline] stage "${stageId}": assigned MCP server ${id} no longer exists`);
