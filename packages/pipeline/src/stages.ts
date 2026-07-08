@@ -2,6 +2,7 @@ import type { AgentRunner, RunToolAssignments } from '@claude-hub/agent-runner';
 import {
   render,
   type AgentProviderId,
+  type McpTransport,
   type PipelineStageId,
   type Project,
   type StageConfig,
@@ -160,24 +161,96 @@ function resolveToolAssignments(
   const skillIds = [...new Set([...(project.skills ?? []), ...(cfg.skills ?? [])])];
   const serverIds = [...new Set([...(project.mcpServers ?? []), ...(cfg.mcpServers ?? [])])];
   const skills: RunToolAssignments['skills'] = [];
+  const requiredKeys = new Set<string>();
   for (const id of skillIds) {
     const skill = toolbox.skills.find((s) => s.id === id);
     if (!skill) {
       console.warn(`[pipeline] stage "${stageId}": assigned skill ${id} no longer exists`);
       continue;
     }
+    for (const key of skill.requiredEnv ?? []) requiredKeys.add(key);
     skills.push({ name: skill.name, description: skill.description, body: skill.body });
   }
-  const mcpServers: RunToolAssignments['mcpServers'] = [];
+  const servers: { name: string; transport: McpTransport; requiredEnv: string[] }[] = [];
   for (const id of serverIds) {
     const server = toolbox.mcpServers.find((m) => m.id === id);
     if (!server) {
       console.warn(`[pipeline] stage "${stageId}": assigned MCP server ${id} no longer exists`);
       continue;
     }
-    mcpServers.push({ name: server.name, transport: server.transport });
+    for (const key of server.requiredEnv ?? []) requiredKeys.add(key);
+    servers.push({
+      name: server.name,
+      transport: server.transport,
+      requiredEnv: server.requiredEnv ?? [],
+    });
   }
-  return { skills, mcpServers };
+
+  // Vault values for the assigned tools' required keys only — an unassigned
+  // tool's secrets never reach the run. Unset keys warn but don't fail the
+  // stage: the vault lamp is the pre-run signal, and a hard fail would
+  // punish optional integrations.
+  const env: Record<string, string> = {};
+  const vault = store.vault();
+  for (const key of requiredKeys) {
+    const entry = vault.find((e) => e.key === key);
+    if (entry?.value == null) {
+      console.warn(
+        `[pipeline] stage "${stageId}": required vault key ${key} is ` +
+          `${entry ? 'unset' : 'missing'} — run continues without it`,
+      );
+      continue;
+    }
+    env[key] = entry.value;
+  }
+
+  const mcpServers: RunToolAssignments['mcpServers'] = servers.map((s) => ({
+    name: s.name,
+    transport: resolveTransportSecrets(s.transport, s.requiredEnv, env),
+  }));
+  return { skills, mcpServers, ...(Object.keys(env).length > 0 ? { env } : {}) };
+}
+
+/**
+ * Resolves a server's transport against vault values: required keys are
+ * injected into stdio env (stored literal env wins as an override), and
+ * `${KEY}` placeholders in stdio env values / http header values are
+ * substituted for keys the server declared in requiredEnv. Unset keys leave
+ * placeholders untouched so failures are visible in the run, not silent.
+ */
+export function resolveTransportSecrets(
+  transport: McpTransport,
+  requiredEnv: string[],
+  vaultValues: Record<string, string>,
+): McpTransport {
+  const substitute = (value: string): string =>
+    value.replace(/\$\{([A-Z][A-Z0-9_]*)\}/g, (match, key: string) =>
+      requiredEnv.includes(key) && vaultValues[key] !== undefined ? vaultValues[key] : match,
+    );
+  if (transport.type === 'stdio') {
+    const env: Record<string, string> = {};
+    for (const key of requiredEnv) {
+      const value = vaultValues[key];
+      if (value !== undefined) env[key] = value;
+    }
+    for (const [key, value] of Object.entries(transport.env ?? {})) {
+      env[key] = substitute(value);
+    }
+    return {
+      type: 'stdio',
+      command: transport.command,
+      ...(transport.args !== undefined ? { args: transport.args } : {}),
+      ...(Object.keys(env).length > 0 ? { env } : {}),
+    };
+  }
+  const headers = Object.fromEntries(
+    Object.entries(transport.headers ?? {}).map(([name, value]) => [name, substitute(value)]),
+  );
+  return {
+    type: 'http',
+    url: transport.url,
+    ...(Object.keys(headers).length > 0 ? { headers } : {}),
+  };
 }
 
 /**

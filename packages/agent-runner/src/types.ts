@@ -18,6 +18,11 @@ export interface ResolvedMcpServer {
 export interface RunToolAssignments {
   skills: ResolvedSkill[];
   mcpServers: ResolvedMcpServer[];
+  /**
+   * Vault values required by the assigned tools, resolved by the caller.
+   * Injected into the agent child process env (merged over process.env).
+   */
+  env?: Record<string, string>;
 }
 
 export interface RunProjectSessionOptions {

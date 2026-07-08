@@ -41,6 +41,8 @@ export interface SpawnOptions {
   claudePath?: string;
   /** Extra CLI args appended before the prompt. */
   extraArgs?: string[];
+  /** Extra env vars merged over process.env for the child. */
+  env?: Record<string, string>;
 }
 
 export type SpawnResult =

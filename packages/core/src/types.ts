@@ -336,6 +336,8 @@ export interface ToolboxSkill {
   /** SKILL.md markdown body. */
   body: string;
   tags: string[];
+  /** Vault keys (VAULT_KEY_PATTERN) this skill needs at run time. */
+  requiredEnv?: string[];
   source: 'bundled' | 'user';
   /** Bundled only: asset version; a higher shipped version reseeds the entry. */
   bundledVersion?: number;
@@ -355,6 +357,8 @@ export interface ToolboxMcpServer {
   /** env values / headers may carry secrets; never sent to the UI. */
   transport: McpTransport;
   tags: string[];
+  /** Vault keys (VAULT_KEY_PATTERN) this server needs at run time. */
+  requiredEnv?: string[];
   createdAt: ISODateString;
   updatedAt: ISODateString;
 }
@@ -362,6 +366,22 @@ export interface ToolboxMcpServer {
 export interface Toolbox {
   skills: ToolboxSkill[];
   mcpServers: ToolboxMcpServer[];
+}
+
+// ---------------------------------------------------------------------------
+// Vault (global key-value config for tool integrations)
+// ---------------------------------------------------------------------------
+
+/** Env-var-like vault key: SCREAMING_SNAKE, must start with a letter. */
+export const VAULT_KEY_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
+
+export interface VaultEntry {
+  /** Unique key (VAULT_KEY_PATTERN). */
+  key: string;
+  /** null = declared but unset; drives the vault's warning lamp in the UI. */
+  value: string | null;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
 }
 
 // ---------------------------------------------------------------------------
@@ -428,7 +448,7 @@ export type AgentProviderConfigs = {
  * file lands; the store refuses to load mismatched versions to avoid silent
  * data corruption.
  */
-export const STORE_SCHEMA_VERSION = 5;
+export const STORE_SCHEMA_VERSION = 6;
 
 export interface AppConfig {
   schemaVersion: number;
@@ -466,6 +486,7 @@ export interface StoreSnapshot {
   workItems: WorkItem[];
   toolbox: Toolbox;
   gitCredentials: GitCredential[];
+  vault: VaultEntry[];
 }
 
 export type StoreEntityKey = keyof StoreSnapshot;

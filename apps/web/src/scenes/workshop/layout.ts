@@ -94,6 +94,10 @@ export const TOOLBOX_X = 4.1;
 export const TOOLBOX_W = 1.35;
 export const TOOLBOX_D = 1.0;
 export const TOOLBOX_H = 0.8;
+export const VAULT_X = 5.95; // TOOLBOX_X + TOOLBOX_W + a 0.5 gap
+export const VAULT_W = 1.0;
+export const VAULT_D = 1.0;
+export const VAULT_H = 1.1;
 
 /** Front-corner y of the console, its back face flush with the wall. */
 export function consoleY(floorD: number): number {
@@ -103,6 +107,11 @@ export function consoleY(floorD: number): number {
 /** Front-corner y of the tool box, its back face flush with the wall. */
 export function toolboxY(floorD: number): number {
   return floorD - TOOLBOX_D;
+}
+
+/** Front-corner y of the vault, its back face flush with the wall. */
+export function vaultY(floorD: number): number {
+  return floorD - VAULT_D;
 }
 
 export function laneY(laneIndex: number): number {

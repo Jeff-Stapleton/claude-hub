@@ -24,8 +24,27 @@ describe('Store', () => {
     expect(store.projects()).toEqual([]);
     expect(store.channels()).toEqual([]);
     expect(store.triggers()).toEqual([]);
+    expect(store.vault()).toEqual([]);
     expect(store.orchestrator().status).toBe('stopped');
     expect(store.config().schemaVersion).toBe(STORE_SCHEMA_VERSION);
+  });
+
+  it('persists vault entries and reloads them', async () => {
+    const now = '2026-01-01T00:00:00.000Z';
+    await store.update('vault', [
+      { key: 'GITHUB_TOKEN', value: 'tok', createdAt: now, updatedAt: now },
+      { key: 'AWS_REGION', value: null, createdAt: now, updatedAt: now },
+    ]);
+
+    const onDisk = JSON.parse(await readFile(join(root, 'vault.json'), 'utf8'));
+    expect(onDisk).toHaveLength(2);
+
+    const fresh = new Store(new HubPaths(root));
+    await fresh.load();
+    expect(fresh.vault()).toEqual([
+      { key: 'GITHUB_TOKEN', value: 'tok', createdAt: now, updatedAt: now },
+      { key: 'AWS_REGION', value: null, createdAt: now, updatedAt: now },
+    ]);
   });
 
   it('persists projects and emits change', async () => {

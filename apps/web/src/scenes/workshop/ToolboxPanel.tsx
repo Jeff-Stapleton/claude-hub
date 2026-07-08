@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { McpServerBody, SkillBody } from '../../api.js';
-import type { Toolbox, ToolboxMcpServer, ToolboxSkill } from '../../types.js';
+import type { RedactedVaultEntry, Toolbox, ToolboxMcpServer, ToolboxSkill } from '../../types.js';
 import * as s from './panelStyles.js';
 
 export type ToolboxAction =
@@ -20,6 +20,7 @@ interface SkillDraft {
   name: string;
   description: string;
   tags: string;
+  requiredEnv: string;
   body: string;
 }
 
@@ -27,6 +28,7 @@ interface ServerDraft {
   name: string;
   description: string;
   tags: string;
+  requiredEnv: string;
   transportType: 'stdio' | 'http';
   command: string;
   args: string;
@@ -35,11 +37,12 @@ interface ServerDraft {
   headers: string;
 }
 
-const BLANK_SKILL: SkillDraft = { name: '', description: '', tags: '', body: '' };
+const BLANK_SKILL: SkillDraft = { name: '', description: '', tags: '', requiredEnv: '', body: '' };
 const BLANK_SERVER: ServerDraft = {
   name: '',
   description: '',
   tags: '',
+  requiredEnv: '',
   transportType: 'stdio',
   command: '',
   args: '',
@@ -57,12 +60,14 @@ const BLANK_SERVER: ServerDraft = {
  */
 export function ToolboxPanel({
   toolbox,
+  vault = [],
   isPending,
   error,
   onAction,
   onClose,
 }: {
   toolbox: Toolbox;
+  vault?: RedactedVaultEntry[];
   isPending: boolean;
   error: unknown;
   onAction: (action: ToolboxAction) => void;
@@ -152,6 +157,8 @@ export function ToolboxPanel({
                 name={skill.name}
                 description={skill.description}
                 tags={skill.tags}
+                requiredEnv={skill.requiredEnv ?? []}
+                vault={vault}
                 badge={skill.source === 'bundled' ? 'bundled' : undefined}
                 actions={
                   skill.source === 'bundled'
@@ -165,6 +172,7 @@ export function ToolboxPanel({
                                 name: `${skill.name}-copy`,
                                 description: skill.description,
                                 tags: skill.tags.join(', '),
+                                requiredEnv: (skill.requiredEnv ?? []).join(', '),
                                 body: skill.body,
                               },
                             }),
@@ -181,6 +189,7 @@ export function ToolboxPanel({
                                 name: skill.name,
                                 description: skill.description,
                                 tags: skill.tags.join(', '),
+                                requiredEnv: (skill.requiredEnv ?? []).join(', '),
                                 body: skill.body,
                               },
                             }),
@@ -217,6 +226,8 @@ export function ToolboxPanel({
                     : server.transport.url)
                 }
                 tags={server.tags}
+                requiredEnv={server.requiredEnv ?? []}
+                vault={vault}
                 actions={[
                   {
                     label: 'edit',
@@ -302,6 +313,7 @@ function SkillForm({
           description: draft.description.trim(),
           body: draft.body,
           tags: parseTags(draft.tags),
+          requiredEnv: parseRequiredEnv(draft.requiredEnv),
         });
       }}
       style={formStack}
@@ -323,6 +335,16 @@ function SkillForm({
       <label style={s.panelLabel}>
         tags <span style={s.panelHint}>comma-separated, e.g. react, frontend</span>
         <input value={draft.tags} onChange={(e) => set('tags', e.target.value)} style={s.panelInput} />
+      </label>
+      <label style={s.panelLabel}>
+        required vault keys{' '}
+        <span style={s.panelHint}>comma-separated, e.g. GITHUB_TOKEN — created unset in the vault</span>
+        <input
+          value={draft.requiredEnv}
+          onChange={(e) => set('requiredEnv', e.target.value)}
+          placeholder="GITHUB_TOKEN, AWS_ACCESS_KEY_ID"
+          style={s.panelInput}
+        />
       </label>
       <label style={s.panelLabel}>
         instructions (markdown)
@@ -389,6 +411,18 @@ function ServerForm({
       <label style={s.panelLabel}>
         tags <span style={s.panelHint}>comma-separated</span>
         <input value={draft.tags} onChange={(e) => set('tags', e.target.value)} style={s.panelInput} />
+      </label>
+      <label style={s.panelLabel}>
+        required vault keys{' '}
+        <span style={s.panelHint}>
+          comma-separated — injected as env / ${'{'}KEY{'}'} substitution at run time
+        </span>
+        <input
+          value={draft.requiredEnv}
+          onChange={(e) => set('requiredEnv', e.target.value)}
+          placeholder="CLICKUP_API_KEY"
+          style={s.panelInput}
+        />
       </label>
       <div style={s.panelRow}>
         {(['stdio', 'http'] as const).map((t) => (
@@ -487,12 +521,16 @@ function ToolRow({
   name,
   description,
   tags,
+  requiredEnv = [],
+  vault = [],
   badge,
   actions,
 }: {
   name: string;
   description: string;
   tags: string[];
+  requiredEnv?: string[];
+  vault?: RedactedVaultEntry[];
   badge?: string | undefined;
   actions: Array<{ label: string; danger?: boolean; onClick: () => void }>;
 }): JSX.Element {
@@ -507,6 +545,18 @@ function ToolRow({
               {tag}
             </span>
           ))}
+          {requiredEnv.map((key) => {
+            const isSet = vault.some((e) => e.key === key && e.valueSet);
+            return (
+              <span
+                key={key}
+                style={isSet ? envChipSet : envChipUnset}
+                title={isSet ? `${key} is configured in the vault` : `${key} is not set — open the vault`}
+              >
+                {key}
+              </span>
+            );
+          })}
         </div>
         <div style={toolRowDescription}>{description}</div>
       </div>
@@ -558,6 +608,7 @@ function toServerDraft(server: ToolboxMcpServer): ServerDraft {
     name: server.name,
     description: server.description ?? '',
     tags: server.tags.join(', '),
+    requiredEnv: (server.requiredEnv ?? []).join(', '),
     transportType: t.type,
     command: t.type === 'stdio' ? t.command : '',
     args: t.type === 'stdio' ? (t.args ?? []).join('\n') : '',
@@ -571,6 +622,7 @@ function toServerDraft(server: ToolboxMcpServer): ServerDraft {
 
 function fromServerDraft(draft: ServerDraft): McpServerBody {
   const tags = parseTags(draft.tags);
+  const requiredEnv = parseRequiredEnv(draft.requiredEnv);
   const description = draft.description.trim();
   if (draft.transportType === 'stdio') {
     const args = draft.args
@@ -582,6 +634,7 @@ function fromServerDraft(draft: ServerDraft): McpServerBody {
       name: draft.name.trim(),
       ...(description !== '' ? { description } : {}),
       tags,
+      requiredEnv,
       transport: {
         type: 'stdio',
         command: draft.command.trim(),
@@ -595,6 +648,7 @@ function fromServerDraft(draft: ServerDraft): McpServerBody {
     name: draft.name.trim(),
     ...(description !== '' ? { description } : {}),
     tags,
+    requiredEnv,
     transport: {
       type: 'http',
       url: draft.url.trim(),
@@ -610,6 +664,18 @@ function parseTags(raw: string): string[] {
         .split(',')
         .map((t) => t.trim().toLowerCase())
         .filter((t) => t.length > 0),
+    ),
+  ];
+}
+
+/** Comma-separated vault key names; case is preserved (keys are UPPER_SNAKE). */
+function parseRequiredEnv(raw: string): string[] {
+  return [
+    ...new Set(
+      raw
+        .split(',')
+        .map((k) => k.trim())
+        .filter((k) => k.length > 0),
     ),
   ];
 }
@@ -699,6 +765,20 @@ const badgeStyle: React.CSSProperties = {
   borderRadius: 8,
   border: '1px solid #5a7a4a',
   color: '#9ec27a',
+};
+
+const envChipSet: React.CSSProperties = {
+  ...tagStyle,
+  fontFamily: 'monospace',
+  border: '1px solid #3a5a3a',
+  color: '#9ec27a',
+};
+
+const envChipUnset: React.CSSProperties = {
+  ...tagStyle,
+  fontFamily: 'monospace',
+  border: '1px solid rgba(232, 176, 74, 0.5)',
+  color: '#e8b04a',
 };
 
 const rowButton: React.CSSProperties = {

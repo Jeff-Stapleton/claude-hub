@@ -44,7 +44,7 @@ export async function spawnProjectSession(opts: SpawnOptions): Promise<SpawnResu
   return new Promise<SpawnResult>((resolve) => {
     const child = spawn(claudePath, args, {
       cwd: opts.cwd,
-      env: process.env,
+      env: opts.env ? { ...process.env, ...opts.env } : process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: useShell,
     });

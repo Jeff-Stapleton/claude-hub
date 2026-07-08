@@ -17,6 +17,7 @@ import {
   type StoreSnapshot,
   type Toolbox,
   type Trigger,
+  type VaultEntry,
   type WorkItem,
 } from './types.js';
 
@@ -66,6 +67,7 @@ function emptySnapshot(): StoreSnapshot {
     workItems: [],
     toolbox: { skills: [], mcpServers: [] },
     gitCredentials: [],
+    vault: [],
   };
 }
 
@@ -145,6 +147,7 @@ export class Store extends EventEmitter {
       this.paths.file('gitCredentials'),
       fresh.gitCredentials,
     );
+    fresh.vault = await readJsonOrDefault(this.paths.file('vault'), fresh.vault);
 
     this.snapshot = fresh;
     this.loaded = true;
@@ -191,6 +194,10 @@ export class Store extends EventEmitter {
 
   gitCredentials(): GitCredential[] {
     return this.get().gitCredentials;
+  }
+
+  vault(): VaultEntry[] {
+    return this.get().vault;
   }
 
   // -- writes ---------------------------------------------------------------
@@ -321,16 +328,17 @@ function mergeConfigDefaults(persisted: Partial<AppConfig>): AppConfig {
   const config: AppConfig = {
     ...DEFAULT_CONFIG,
     ...persisted,
-    // v1 -> v2 -> v3 -> v4 are purely additive (new files default to [], new
-    // optional fields back-filled here), so older stores coerce forward.
-    // v4 -> v5 additionally reshapes projects, handled by
+    // v1 -> v2 -> v3 -> v4 and v5 -> v6 are purely additive (new files
+    // default to [], new optional fields back-filled here), so older stores
+    // coerce forward. v4 -> v5 additionally reshapes projects, handled by
     // migrateLegacyProjects during load.
     schemaVersion:
       persisted.schemaVersion === undefined ||
       persisted.schemaVersion === 1 ||
       persisted.schemaVersion === 2 ||
       persisted.schemaVersion === 3 ||
-      persisted.schemaVersion === 4
+      persisted.schemaVersion === 4 ||
+      persisted.schemaVersion === 5
         ? STORE_SCHEMA_VERSION
         : persisted.schemaVersion,
     defaultProvider: persisted.defaultProvider ?? DEFAULT_CONFIG.defaultProvider,

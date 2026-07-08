@@ -6,6 +6,7 @@ import type {
   Project,
   ProjectRepo,
   RedactedGitCredential,
+  RedactedVaultEntry,
   ToolboxMcpServer,
   ToolboxSkill,
   UIState,
@@ -48,6 +49,7 @@ export interface SkillBody {
   description: string;
   body: string;
   tags?: string[];
+  requiredEnv?: string[];
 }
 
 export interface McpServerBody {
@@ -55,6 +57,7 @@ export interface McpServerBody {
   description?: string;
   transport: McpTransportInput;
   tags?: string[];
+  requiredEnv?: string[];
 }
 
 export interface TriggerRunRecord {
@@ -236,4 +239,18 @@ export const api = {
     req<{ ok: true }>(`/api/toolbox/mcp-servers/${encodeURIComponent(id)}`, {
       method: 'DELETE',
     }),
+  createVaultKey: (body: { key: string; value?: string }) =>
+    req<RedactedVaultEntry>('/api/vault/keys', { method: 'POST', body: JSON.stringify(body) }),
+  setVaultValue: (key: string, value: string) =>
+    req<RedactedVaultEntry>(`/api/vault/keys/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value }),
+    }),
+  clearVaultValue: (key: string) =>
+    req<RedactedVaultEntry>(`/api/vault/keys/${encodeURIComponent(key)}`, {
+      method: 'PUT',
+      body: JSON.stringify({ value: null }),
+    }),
+  deleteVaultKey: (key: string) =>
+    req<{ ok: true }>(`/api/vault/keys/${encodeURIComponent(key)}`, { method: 'DELETE' }),
 };

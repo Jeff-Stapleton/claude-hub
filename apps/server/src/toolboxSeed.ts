@@ -1,7 +1,13 @@
-import { TOOLBOX_NAME_PATTERN, type Store, type ToolboxSkill } from '@claude-hub/core';
+import {
+  TOOLBOX_NAME_PATTERN,
+  VAULT_KEY_PATTERN,
+  type Store,
+  type ToolboxSkill,
+} from '@claude-hub/core';
 import { readFile, readdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
+import { ensureVaultKeys } from './vault.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -16,6 +22,7 @@ interface BundledSkillAsset {
   name: string;
   description: string;
   tags: string[];
+  requiredEnv: string[];
   version: number;
   body: string;
 }
@@ -47,6 +54,7 @@ export async function seedBundledSkills(
       description: asset.description,
       body: asset.body,
       tags: asset.tags,
+      ...(asset.requiredEnv.length > 0 ? { requiredEnv: asset.requiredEnv } : {}),
       source: 'bundled',
       bundledVersion: asset.version,
       createdAt: current?.createdAt ?? now,
@@ -60,6 +68,12 @@ export async function seedBundledSkills(
     ...toolbox,
     skills: [...toolbox.skills.filter((s) => !changed.has(s.id)), ...changes],
   }));
+  // Declare required keys in the vault (unset) so the vault lamp can warn.
+  // ensureVaultKeys never overwrites, so reseeds can't clobber user values.
+  await ensureVaultKeys(
+    store,
+    changes.flatMap((s) => s.requiredEnv ?? []),
+  );
 }
 
 async function readBundledSkillAssets(assetsDir: string): Promise<BundledSkillAsset[]> {
@@ -121,6 +135,17 @@ function parseSkillMarkdown(
     .split(',')
     .map((t) => t.trim().toLowerCase())
     .filter((t) => t.length > 0);
+  const requiredEnv: string[] = [];
+  for (const key of (fields.get('requiredEnv') ?? '')
+    .split(',')
+    .map((k) => k.trim())
+    .filter((k) => k.length > 0)) {
+    if (!VAULT_KEY_PATTERN.test(key)) {
+      console.warn(`[toolbox] bundled skill "${name}": dropping invalid requiredEnv key "${key}"`);
+      continue;
+    }
+    if (!requiredEnv.includes(key)) requiredEnv.push(key);
+  }
 
-  return { name, description, tags, version, body: body!.trim() };
+  return { name, description, tags, requiredEnv, version, body: body!.trim() };
 }

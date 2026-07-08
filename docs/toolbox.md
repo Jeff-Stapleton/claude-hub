@@ -22,6 +22,31 @@ config's tool picker.
   (`RedactedMcpTransport`). Editing a server round-trips blank values to mean
   "keep the stored secret" (the channels bot-token pattern).
 
+## Vault
+
+The vault (the steel safe next to the tool box) is a global key-value store
+(`~/.claude-hub/vault.json`, entity `vault`) for the config tools need at run
+time — GitHub tokens, ClickUp keys, AWS creds. Skills and MCP servers declare
+the keys they need via `requiredEnv` (bundled skills via a `requiredEnv:`
+frontmatter line); adding a tool auto-creates missing keys as *unset*
+(`value: null`), which lights the amber lamp on the safe until a value is
+pasted in.
+
+- Values are write-only: `UIState.vault` carries `{ key, valueSet, requiredBy }`
+  only, and there is no reveal endpoint. `requiredBy` is derived from the
+  toolbox at read time, never stored.
+- At run time `resolveToolAssignments` gathers the union of the **assigned**
+  tools' `requiredEnv`, resolves values from the vault, and passes them as
+  `tools.env` — injected into the agent child process env (claude and cursor)
+  and into MCP transports (stdio env merge; `${KEY}` substitution in stdio env
+  and http header values). Unassigned tools' keys never reach a run, keeping
+  deny-by-default intact. Literal per-server transport env wins over the vault
+  as an override.
+- Unset required keys warn and the run continues — the lamp is the pre-run
+  signal; a missing token then fails loudly inside the run.
+- Deleting a key still listed in some tool's `requiredEnv` is refused (409);
+  clear the value or remove it from the tool first.
+
 ## Run-time injection
 
 `packages/pipeline/src/stages.ts` resolves assigned ids to full definitions

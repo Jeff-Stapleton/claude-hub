@@ -185,6 +185,7 @@ export interface ToolboxSkill {
   description: string;
   body: string;
   tags: string[];
+  requiredEnv?: string[];
   source: 'bundled' | 'user';
   bundledVersion?: number;
   createdAt: string;
@@ -202,6 +203,7 @@ export interface ToolboxMcpServer {
   description?: string;
   transport: RedactedMcpTransport;
   tags: string[];
+  requiredEnv?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -209,6 +211,15 @@ export interface ToolboxMcpServer {
 export interface Toolbox {
   skills: ToolboxSkill[];
   mcpServers: ToolboxMcpServer[];
+}
+
+/** Vault entry as the UI sees it: value stripped to a set/unset flag. */
+export interface RedactedVaultEntry {
+  key: string;
+  valueSet: boolean;
+  requiredBy: { skills: string[]; mcpServers: string[] };
+  createdAt: string;
+  updatedAt: string;
 }
 
 /** Plaintext transport shape sent TO the server on create/update. */
@@ -279,4 +290,6 @@ export interface UIState {
   toolbox?: Toolbox;
   /** Optional so payloads from a pre-git-credentials server still render. */
   gitCredentials?: RedactedGitCredential[];
+  /** Optional so payloads from a pre-vault server still render. */
+  vault?: RedactedVaultEntry[];
 }

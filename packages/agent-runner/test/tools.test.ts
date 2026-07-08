@@ -9,6 +9,7 @@ import {
   materializeClaudeTools,
   renderSkillPreamble,
 } from '../src/index.js';
+import { runProcess } from '../src/process.js';
 import type { AgentRunnerConfig, RunToolAssignments } from '../src/types.js';
 
 const TOOLS: RunToolAssignments = {
@@ -134,6 +135,27 @@ describe('cursor runs with tools', () => {
   });
 });
 
+describe('runProcess env merging (the cursor injection path)', () => {
+  it('merges opts.env over process.env for the child', async () => {
+    const result = await runProcess({
+      command: 'node',
+      args: ['-e', 'console.log(process.env.VAULT_INJECTED_KEY ?? "absent")'],
+      cwd: process.cwd(),
+      timeoutMs: 30_000,
+      env: { VAULT_INJECTED_KEY: 'vault-value' },
+    });
+    expect(result.stdout.trim()).toBe('vault-value');
+
+    const without = await runProcess({
+      command: 'node',
+      args: ['-e', 'console.log(process.env.VAULT_INJECTED_KEY ?? "absent")'],
+      cwd: process.cwd(),
+      timeoutMs: 30_000,
+    });
+    expect(without.stdout.trim()).toBe('absent');
+  });
+});
+
 describe('claude runs with tools (fake CLI)', () => {
   let dir: string;
 
@@ -168,6 +190,36 @@ describe('claude runs with tools (fake CLI)', () => {
     // ...and the ephemeral dir (secrets included) is gone after the run.
     expect(existsSync(pluginDir)).toBe(false);
     expect(existsSync(mcpPath)).toBe(false);
+  });
+
+  it('injects tools.env into the child process environment', async () => {
+    const runner = new ProviderAgentRunner(configWithClaude(await writeFakeClaude(dir)));
+
+    const result = await runner.runProjectSession({
+      provider: 'claude',
+      cwd: dir,
+      prompt: 'work',
+      tools: { ...TOOLS, env: { VAULT_INJECTED_KEY: 'vault-value' } },
+    });
+
+    expect(result.ok).toBe(true);
+    const seen = JSON.parse(await readFile(join(dir, 'seen.json'), 'utf8'));
+    expect(seen.vaultEnv).toBe('vault-value');
+  });
+
+  it('leaves the child environment untouched when tools carry no env', async () => {
+    const runner = new ProviderAgentRunner(configWithClaude(await writeFakeClaude(dir)));
+
+    const result = await runner.runProjectSession({
+      provider: 'claude',
+      cwd: dir,
+      prompt: 'work',
+      tools: TOOLS,
+    });
+
+    expect(result.ok).toBe(true);
+    const seen = JSON.parse(await readFile(join(dir, 'seen.json'), 'utf8'));
+    expect(seen.vaultEnv).toBeNull();
   });
 
   it('adds no toolbox flags when tools are absent', async () => {
@@ -222,6 +274,7 @@ const mcpIdx = argv.indexOf('--mcp-config');
 if (mcpIdx !== -1) {
   seen.mcp = JSON.parse(readFileSync(argv[mcpIdx + 1], 'utf8'));
 }
+seen.vaultEnv = process.env.VAULT_INJECTED_KEY ?? null;
 writeFileSync(join(process.cwd(), 'seen.json'), JSON.stringify(seen));
 console.log(JSON.stringify({
   type: 'result',

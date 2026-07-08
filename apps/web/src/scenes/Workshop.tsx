@@ -17,12 +17,14 @@ import {
   FLOOR_W,
   HEAD_X,
   TOOLBOX_X,
+  VAULT_X,
   consoleY,
   defaultPipeline,
   ghostLaneY,
   laneY,
   sceneTransform,
   toolboxY,
+  vaultY,
   workshopFloorDepth,
 } from './workshop/layout.js';
 import { NewProjectWizard } from './workshop/NewProjectWizard.jsx';
@@ -34,6 +36,8 @@ import { StationConfigPanel } from './workshop/StationConfigPanel.jsx';
 import { TimeCardWall } from './workshop/TimeCardWall.jsx';
 import { ToolboxCrate } from './workshop/ToolboxCrate.jsx';
 import { ToolboxPanel, type ToolboxAction } from './workshop/ToolboxPanel.jsx';
+import { VaultPanel, type VaultAction } from './workshop/VaultPanel.jsx';
+import { VaultSafe } from './workshop/VaultSafe.jsx';
 import { WorkItemPanel } from './workshop/WorkItemPanel.jsx';
 
 /**
@@ -56,6 +60,7 @@ type WorkshopSelection =
   | { kind: 'intake'; projectId: string }
   | { kind: 'addStage'; projectId: string }
   | { kind: 'toolbox' }
+  | { kind: 'vault' }
   | { kind: 'newProject' }
   | { kind: 'projectSettings'; projectId: string }
   | null;
@@ -158,6 +163,25 @@ export function Workshop({
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
   });
 
+  const vaultMutation = useMutation({
+    mutationFn: (action: VaultAction): Promise<unknown> => {
+      switch (action.type) {
+        case 'create-key':
+          return api.createVaultKey({
+            key: action.key,
+            ...(action.value !== undefined ? { value: action.value } : {}),
+          });
+        case 'set-value':
+          return api.setVaultValue(action.key, action.value);
+        case 'clear-value':
+          return api.clearVaultValue(action.key);
+        case 'delete-key':
+          return api.deleteVaultKey(action.key);
+      }
+    },
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
+
   const activity = activityQuery.data ?? [];
   const projects = state.projects;
   const workItems = state.workItems ?? [];
@@ -254,6 +278,19 @@ export function Workshop({
         toolCount={toolbox.skills.length + toolbox.mcpServers.length}
         y={toolboxY(floorD)}
         onOpen={() => toggle({ kind: 'toolbox' })}
+      />
+    ),
+  });
+  const vault = state.vault ?? [];
+  entities.push({
+    key: 'vault',
+    anchor: { x: VAULT_X, y: vaultY(floorD) },
+    node: (
+      <VaultSafe
+        keyCount={vault.length}
+        unsetCount={vault.filter((e) => !e.valueSet).length}
+        y={vaultY(floorD)}
+        onOpen={() => toggle({ kind: 'vault' })}
       />
     ),
   });
@@ -362,9 +399,19 @@ export function Workshop({
       {selected?.kind === 'toolbox' ? (
         <ToolboxPanel
           toolbox={toolbox}
+          vault={vault}
           isPending={toolboxMutation.isPending}
           error={toolboxMutation.error}
           onAction={(action) => toolboxMutation.mutate(action)}
+          onClose={() => setSelection(null)}
+        />
+      ) : null}
+      {selected?.kind === 'vault' ? (
+        <VaultPanel
+          vault={vault}
+          isPending={vaultMutation.isPending}
+          error={vaultMutation.error}
+          onAction={(action) => vaultMutation.mutate(action)}
           onClose={() => setSelection(null)}
         />
       ) : null}
@@ -450,13 +497,20 @@ type ValidatedSelection =
   | { kind: 'intake'; projectId: string }
   | { kind: 'addStage'; projectId: string }
   | { kind: 'toolbox' }
+  | { kind: 'vault' }
   | { kind: 'newProject' }
   | { kind: 'projectSettings'; projectId: string; project: UIState['projects'][number] }
   | null;
 
 function validateSelection(selection: WorkshopSelection, state: UIState): ValidatedSelection {
   if (!selection) return null;
-  if (selection.kind === 'toolbox' || selection.kind === 'newProject') return selection;
+  if (
+    selection.kind === 'toolbox' ||
+    selection.kind === 'vault' ||
+    selection.kind === 'newProject'
+  ) {
+    return selection;
+  }
   if (selection.kind === 'item') {
     const item = (state.workItems ?? []).find((it) => it.id === selection.itemId);
     return item ? { ...selection, item } : null;

@@ -8,12 +8,14 @@ import {
 } from '@claude-hub/core';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance, FastifyReply } from 'fastify';
+import { ensureVaultKeys, parseRequiredEnv } from '../vault.js';
 
 interface SkillBody {
   name?: string;
   description?: string;
   body?: string;
   tags?: string[];
+  requiredEnv?: string[];
 }
 
 interface McpServerBody {
@@ -21,6 +23,7 @@ interface McpServerBody {
   description?: string;
   transport?: unknown;
   tags?: string[];
+  requiredEnv?: string[];
 }
 
 /**
@@ -50,6 +53,7 @@ export async function registerToolboxRoutes(app: FastifyInstance, store: Store):
       ...current,
       skills: [...current.skills, skill],
     }));
+    await ensureVaultKeys(store, skill.requiredEnv ?? []);
     return skill;
   });
 
@@ -64,15 +68,23 @@ export async function registerToolboxRoutes(app: FastifyInstance, store: Store):
       if (store.toolbox().skills.some((s) => s.id !== req.params.id && s.name === parsed.name)) {
         return reply.code(400).send({ error: `a skill named "${parsed.name}" already exists` });
       }
+      // Rebuild rather than spread over `existing` so a cleared requiredEnv
+      // doesn't linger from the stored entry.
       const updated: ToolboxSkill = {
-        ...existing!,
+        id: existing!.id,
         ...parsed,
+        source: existing!.source,
+        ...(existing!.bundledVersion !== undefined
+          ? { bundledVersion: existing!.bundledVersion }
+          : {}),
+        createdAt: existing!.createdAt,
         updatedAt: new Date().toISOString(),
       };
       await store.update('toolbox', (current) => ({
         ...current,
         skills: current.skills.map((s) => (s.id === updated.id ? updated : s)),
       }));
+      await ensureVaultKeys(store, updated.requiredEnv ?? []);
       return updated;
     },
   );
@@ -108,6 +120,7 @@ export async function registerToolboxRoutes(app: FastifyInstance, store: Store):
       ...current,
       mcpServers: [...current.mcpServers, server],
     }));
+    await ensureVaultKeys(store, server.requiredEnv ?? []);
     return redactServer(server);
   });
 
@@ -137,6 +150,7 @@ export async function registerToolboxRoutes(app: FastifyInstance, store: Store):
         ...current,
         mcpServers: current.mcpServers.map((m) => (m.id === updated.id ? updated : m)),
       }));
+      await ensureVaultKeys(store, updated.requiredEnv ?? []);
       return redactServer(updated);
     },
   );
@@ -211,8 +225,8 @@ async function scrubAssignments(
 
 function parseSkillBody(
   body: SkillBody | undefined,
-): Pick<ToolboxSkill, 'name' | 'description' | 'body' | 'tags'> | string {
-  const { name, description, body: skillBody, tags } = body ?? {};
+): Pick<ToolboxSkill, 'name' | 'description' | 'body' | 'tags' | 'requiredEnv'> | string {
+  const { name, description, body: skillBody, tags, requiredEnv } = body ?? {};
   const nameError = validateName(name, 'skill');
   if (nameError) return nameError;
   if (!description || typeof description !== 'string' || !description.trim()) {
@@ -221,19 +235,26 @@ function parseSkillBody(
   if (typeof skillBody !== 'string' || !skillBody.trim()) return 'body is required';
   const parsedTags = parseTags(tags);
   if (typeof parsedTags === 'string') return parsedTags;
+  const parsedRequiredEnv = parseRequiredEnv(requiredEnv);
+  if (typeof parsedRequiredEnv === 'string') return parsedRequiredEnv;
   return {
     name: name!,
     description: description.trim(),
     body: skillBody,
     tags: parsedTags,
+    ...(parsedRequiredEnv.length > 0 ? { requiredEnv: parsedRequiredEnv } : {}),
   };
 }
 
 function parseMcpServerBody(
   body: McpServerBody | undefined,
   existingTransport?: McpTransport,
-): Pick<ToolboxMcpServer, 'name' | 'transport' | 'tags'> & { description?: string } | string {
-  const { name, description, transport, tags } = body ?? {};
+):
+  | (Pick<ToolboxMcpServer, 'name' | 'transport' | 'tags' | 'requiredEnv'> & {
+      description?: string;
+    })
+  | string {
+  const { name, description, transport, tags, requiredEnv } = body ?? {};
   const nameError = validateName(name, 'MCP server');
   if (nameError) return nameError;
   if (description !== undefined && typeof description !== 'string') {
@@ -241,12 +262,15 @@ function parseMcpServerBody(
   }
   const parsedTags = parseTags(tags);
   if (typeof parsedTags === 'string') return parsedTags;
+  const parsedRequiredEnv = parseRequiredEnv(requiredEnv);
+  if (typeof parsedRequiredEnv === 'string') return parsedRequiredEnv;
   const parsedTransport = parseTransport(transport, existingTransport);
   if (typeof parsedTransport === 'string') return parsedTransport;
   return {
     name: name!,
     transport: parsedTransport,
     tags: parsedTags,
+    ...(parsedRequiredEnv.length > 0 ? { requiredEnv: parsedRequiredEnv } : {}),
     ...(description !== undefined && description.trim() !== ''
       ? { description: description.trim() }
       : {}),

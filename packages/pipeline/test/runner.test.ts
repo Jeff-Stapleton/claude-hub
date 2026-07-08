@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { defaultPipelineConfig } from '../src/defaults.js';
 import { readArchivedWorkItems, readWorkItemStageRuns } from '../src/history.js';
 import { PipelineRunner, WorkItemStateError } from '../src/runner.js';
+import { resolveTransportSecrets } from '../src/stages.js';
 
 const mockRun = vi.fn<AgentRunner['runProjectSession']>();
 const agentRunner: AgentRunner = { runProjectSession: mockRun };
@@ -531,6 +532,117 @@ describe('toolbox assignment resolution', () => {
     expect(codeCall.tools?.mcpServers.map((m) => m.name)).toEqual(['project-server']);
   });
 
+  it('injects vault values for assigned tools only, skipping unset keys', async () => {
+    const now = new Date().toISOString();
+    await store.update('vault', [
+      { key: 'GITHUB_TOKEN', value: 'gh-secret', createdAt: now, updatedAt: now },
+      { key: 'UNSET_KEY', value: null, createdAt: now, updatedAt: now },
+      { key: 'UNRELATED_SECRET', value: 'leak-me-not', createdAt: now, updatedAt: now },
+    ]);
+    await store.update('toolbox', {
+      skills: [
+        {
+          id: 'skill-1',
+          name: 'gh-skill',
+          description: 'Uses GitHub',
+          body: '# B',
+          tags: [],
+          requiredEnv: ['GITHUB_TOKEN', 'UNSET_KEY'],
+          source: 'user',
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'skill-unassigned',
+          name: 'other-skill',
+          description: 'Not assigned',
+          body: '# O',
+          tags: [],
+          requiredEnv: ['UNRELATED_SECRET'],
+          source: 'user',
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+      mcpServers: [],
+    });
+    await store.update('pipelines', [
+      openPipeline((c) => {
+        c.stages.spec.skills = ['skill-1'];
+      }),
+    ]);
+    mockRun.mockResolvedValue(okResult());
+
+    await runner.enqueue({ projectId: project.id, request: 'vault run', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    const specCall = mockRun.mock.calls[0]![0];
+    // Set + required key injected; unset key skipped (run proceeds anyway);
+    // an unassigned tool's key never leaks into the run.
+    expect(specCall.tools?.env).toEqual({ GITHUB_TOKEN: 'gh-secret' });
+    // Stages with no assigned tools get no env at all.
+    const codeCall = mockRun.mock.calls[1]![0];
+    expect(codeCall.tools?.env).toBeUndefined();
+  });
+
+  it('resolves MCP transports against the vault (stdio env + ${KEY} headers)', async () => {
+    const now = new Date().toISOString();
+    await store.update('vault', [
+      { key: 'AWS_SECRET', value: 'aws-value', createdAt: now, updatedAt: now },
+      { key: 'CLICKUP_API_KEY', value: 'cu-value', createdAt: now, updatedAt: now },
+    ]);
+    await store.update('toolbox', {
+      skills: [],
+      mcpServers: [
+        {
+          id: 'mcp-stdio',
+          name: 'aws-tools',
+          // Literal env overrides the vault-resolved value for the same key.
+          transport: { type: 'stdio', command: 'npx', env: { AWS_SECRET: 'literal-wins' } },
+          tags: [],
+          requiredEnv: ['AWS_SECRET', 'CLICKUP_API_KEY'],
+          createdAt: now,
+          updatedAt: now,
+        },
+        {
+          id: 'mcp-http',
+          name: 'clickup',
+          transport: {
+            type: 'http',
+            url: 'https://example.com/mcp',
+            headers: { Authorization: 'Bearer ${CLICKUP_API_KEY}' },
+          },
+          tags: [],
+          requiredEnv: ['CLICKUP_API_KEY'],
+          createdAt: now,
+          updatedAt: now,
+        },
+      ],
+    });
+    await store.update('pipelines', [
+      openPipeline((c) => {
+        c.stages.spec.mcpServers = ['mcp-stdio', 'mcp-http'];
+      }),
+    ]);
+    mockRun.mockResolvedValue(okResult());
+
+    await runner.enqueue({ projectId: project.id, request: 'mcp vault run', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    const specCall = mockRun.mock.calls[0]![0];
+    const [stdio, http] = specCall.tools!.mcpServers;
+    expect(stdio!.transport).toEqual({
+      type: 'stdio',
+      command: 'npx',
+      env: { AWS_SECRET: 'literal-wins', CLICKUP_API_KEY: 'cu-value' },
+    });
+    expect(http!.transport).toEqual({
+      type: 'http',
+      url: 'https://example.com/mcp',
+      headers: { Authorization: 'Bearer cu-value' },
+    });
+  });
+
   it('prepends the project vision/context preamble to every stage prompt', async () => {
     await store.update('projects', [
       { ...project, vision: 'Build the best widget.', context: 'Use pnpm.' },
@@ -559,5 +671,45 @@ describe('toolbox assignment resolution', () => {
 
     const prompt = mockRun.mock.calls[0]![0].prompt;
     expect(prompt.startsWith('# Project:')).toBe(false);
+  });
+});
+
+describe('resolveTransportSecrets', () => {
+  it('leaves placeholders for unset keys untouched so failures are visible', () => {
+    const resolved = resolveTransportSecrets(
+      { type: 'http', url: 'https://x', headers: { Authorization: 'Bearer ${MISSING_KEY}' } },
+      ['MISSING_KEY'],
+      {},
+    );
+    expect(resolved).toEqual({
+      type: 'http',
+      url: 'https://x',
+      headers: { Authorization: 'Bearer ${MISSING_KEY}' },
+    });
+  });
+
+  it('never substitutes keys the server did not declare in requiredEnv', () => {
+    const resolved = resolveTransportSecrets(
+      { type: 'http', url: 'https://x', headers: { Authorization: 'Bearer ${OTHER_KEY}' } },
+      [],
+      { OTHER_KEY: 'should-not-appear' },
+    );
+    expect(resolved.type === 'http' && resolved.headers!.Authorization).toBe(
+      'Bearer ${OTHER_KEY}',
+    );
+  });
+
+  it('injects only declared keys into stdio env and preserves args', () => {
+    const resolved = resolveTransportSecrets(
+      { type: 'stdio', command: 'npx', args: ['-y', 'x'] },
+      ['DECLARED_KEY'],
+      { DECLARED_KEY: 'v1', UNDECLARED_KEY: 'v2' },
+    );
+    expect(resolved).toEqual({
+      type: 'stdio',
+      command: 'npx',
+      args: ['-y', 'x'],
+      env: { DECLARED_KEY: 'v1' },
+    });
   });
 });

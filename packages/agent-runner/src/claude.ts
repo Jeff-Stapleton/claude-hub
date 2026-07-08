@@ -28,6 +28,7 @@ export async function runClaudeProjectSession(
         ? { dangerouslySkipPermissions: config.dangerouslySkipPermissions }
         : {}),
       ...(extraArgs.length > 0 ? { extraArgs } : {}),
+      ...(opts.tools?.env ? { env: opts.tools.env } : {}),
     });
   } finally {
     await materialized?.cleanup();

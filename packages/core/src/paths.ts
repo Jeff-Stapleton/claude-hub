@@ -25,7 +25,8 @@ export class HubPaths {
       | 'pipelines'
       | 'workItems'
       | 'toolbox'
-      | 'gitCredentials',
+      | 'gitCredentials'
+      | 'vault',
   ): string {
     return join(this.root, `${name}.json`);
   }

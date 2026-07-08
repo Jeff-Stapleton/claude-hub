@@ -13,6 +13,7 @@ import type {
 import { effectivePipelineConfig } from '@claude-hub/pipeline';
 import { redactCredential, type RedactedGitCredential } from './routes/git.js';
 import { redactToolbox, type RedactedToolbox } from './routes/toolbox.js';
+import { redactVault, type RedactedVaultEntry } from './vault.js';
 
 /**
  * The shape returned by GET /api/state and pushed over the WS channel.
@@ -35,6 +36,8 @@ export interface UIState {
   toolbox: RedactedToolbox;
   /** Git credentials with tokens stripped; repos reference these by id. */
   gitCredentials: RedactedGitCredential[];
+  /** Vault keys with values stripped to set/unset; requiredBy is derived. */
+  vault: RedactedVaultEntry[];
 }
 
 export type RedactedWorkItem = Omit<WorkItem, 'sessions'>;
@@ -131,5 +134,6 @@ export async function buildUIState(
     workItems,
     toolbox: redactToolbox(snapshot.toolbox),
     gitCredentials: snapshot.gitCredentials.map(redactCredential),
+    vault: redactVault(snapshot.vault, snapshot.toolbox),
   };
 }

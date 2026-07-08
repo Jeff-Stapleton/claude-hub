@@ -27,7 +27,13 @@ export async function runCursorProjectSession(
   const command = config.cliPath?.trim() ? config.cliPath : 'agent';
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const args = buildCursorArgs(config, opts);
-  const proc = await runProcess({ command, args, cwd: opts.cwd, timeoutMs });
+  const proc = await runProcess({
+    command,
+    args,
+    cwd: opts.cwd,
+    timeoutMs,
+    ...(opts.tools?.env ? { env: opts.tools.env } : {}),
+  });
 
   if (proc.spawnError) {
     return {

@@ -5,6 +5,8 @@ export interface ProcessRunOptions {
   args: string[];
   cwd: string;
   timeoutMs: number;
+  /** Extra env vars merged over process.env for the child. */
+  env?: Record<string, string>;
 }
 
 export interface ProcessRunResult {
@@ -20,7 +22,7 @@ export function runProcess(opts: ProcessRunOptions): Promise<ProcessRunResult> {
   return new Promise<ProcessRunResult>((resolve) => {
     const child = spawn(opts.command, opts.args, {
       cwd: opts.cwd,
-      env: process.env,
+      env: opts.env ? { ...process.env, ...opts.env } : process.env,
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: useShell,
     });

@@ -21,6 +21,9 @@ import {
   TOOLBOX_W,
   TOOLBOX_X,
   TUNNEL_H,
+  VAULT_D,
+  VAULT_W,
+  VAULT_X,
   consoleY,
   defaultPipeline,
   floorDepth,
@@ -32,6 +35,7 @@ import {
   sceneTransform,
   slotX,
   toolboxY,
+  vaultY,
   workshopFloorDepth,
 } from '../src/scenes/workshop/layout.js';
 import { PIPELINE_STAGE_ORDER } from '../src/types.js';
@@ -150,6 +154,21 @@ describe('workshop lane layout', () => {
     // Side by side without overlap, inside the floor.
     expect(TOOLBOX_X).toBeGreaterThan(CONSOLE_X + CONSOLE_W);
     expect(TOOLBOX_X + TOOLBOX_W).toBeLessThan(FLOOR_W);
+  });
+
+  it('stands the vault against the back wall, right of the tool box', () => {
+    for (const n of [1, 3, 9]) {
+      const floorD = floorDepth(n);
+      // Back face flush with the back-left wall (y = floorD).
+      expect(vaultY(floorD) + VAULT_D).toBe(floorD);
+      // Front face clear of the deepest lane's machines.
+      expect(vaultY(floorD)).toBeGreaterThan(laneY(n - 1) + SLOT_LOCAL_Y + SLOT_D);
+      // Footprint fits inside the back band.
+      expect(VAULT_D).toBeLessThanOrEqual(BACK_MARGIN);
+    }
+    // Next to the tool box without overlap, inside the floor.
+    expect(VAULT_X).toBeGreaterThan(TOOLBOX_X + TOOLBOX_W);
+    expect(VAULT_X + VAULT_W).toBeLessThan(FLOOR_W);
   });
 
   it('grows the floor depth linearly with lane count, with a one-band minimum', () => {

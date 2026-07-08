@@ -26,6 +26,7 @@ import { registerProjectRoutes } from './routes/projects.js';
 import { registerStateRoutes } from './routes/state.js';
 import { registerToolboxRoutes } from './routes/toolbox.js';
 import { registerTriggerRoutes } from './routes/triggers.js';
+import { registerVaultRoutes } from './routes/vault.js';
 import { seedBundledSkills } from './toolboxSeed.js';
 import { registerWs } from './ws.js';
 
@@ -172,6 +173,7 @@ async function main(): Promise<void> {
   await registerPipelineRoutes(app, store, pipelineRunner);
   await registerChannelRoutes(app, store);
   await registerToolboxRoutes(app, store);
+  await registerVaultRoutes(app, store);
   await registerActivityRoutes(app, store);
   await registerOrchestratorRoutes(app, store);
 
