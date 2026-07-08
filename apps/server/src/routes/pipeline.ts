@@ -1,22 +1,20 @@
 import {
-  PIPELINE_STAGE_ORDER,
-  type MonitorStageConfig,
+  MACHINE_KEY_PATTERN,
   type PipelineConfig,
-  type PipelineStageId,
-  type StageConfig,
+  type PipelineMachine,
   type Store,
 } from '@claude-hub/core';
 import {
   WorkItemStateError,
   effectivePipelineConfig,
+  listMachineTemplates,
   readArchivedWorkItems,
   readWorkItemStageRuns,
   type PipelineRunner,
 } from '@claude-hub/pipeline';
 import type { FastifyInstance, FastifyReply } from 'fastify';
-
-/** Stages where shell commands are honored. */
-const COMMAND_STAGES: ReadonlySet<PipelineStageId> = new Set(['test', 'deploy', 'monitor']);
+import { ensureVaultKeys } from '../vault.js';
+import { parseMachineBehavior } from './machineTemplates.js';
 
 interface CreateWorkItemBody {
   request: string;
@@ -26,7 +24,7 @@ interface CreateWorkItemBody {
 }
 
 interface PutPipelineBody {
-  stages: Record<string, unknown>;
+  machines: unknown[];
 }
 
 export async function registerPipelineRoutes(
@@ -58,6 +56,12 @@ export async function registerPipelineRoutes(
         ...current.filter((p) => p.projectId !== projectId),
         parsed,
       ]);
+      await ensureVaultKeys(
+        store,
+        parsed.machines.flatMap((m) => m.requiredEnv ?? []),
+      );
+      // Un-strand items parked at machines this edit removed.
+      await runner.reconcileLineEdit(projectId);
       return parsed;
     },
   );
@@ -141,115 +145,62 @@ async function handleTransition(
 }
 
 /**
- * Validates a PUT body into a PipelineConfig. Returns an error string on
- * bad input. Requires all six fixed stages so the stored config is always
- * complete (the UI does read-modify-write of the whole stages record).
+ * Validates a PUT body into a PipelineConfig: an ordered machines array
+ * (may be empty — a blank line). Returns an error string on bad input.
+ * The UI does read-modify-write of the whole array, so the stored config
+ * is always complete.
  */
 function parsePipelineBody(
   body: PutPipelineBody,
   projectId: string,
   store: Store,
 ): PipelineConfig | string {
-  const stages = body?.stages;
-  if (!stages || typeof stages !== 'object') return 'stages object is required';
+  const rawMachines = body?.machines;
+  if (!Array.isArray(rawMachines)) return 'machines array is required';
 
-  const knownSkillIds = new Set(store.toolbox().skills.map((s) => s.id));
-  const knownServerIds = new Set(store.toolbox().mcpServers.map((m) => m.id));
+  const templateIds = new Set(listMachineTemplates(store).map((t) => t.id));
+  const seenKeys = new Set<string>();
+  const machines: PipelineMachine[] = [];
 
-  const parsedStages: Partial<Record<PipelineStageId, StageConfig | MonitorStageConfig>> = {};
-  for (const stageId of PIPELINE_STAGE_ORDER) {
-    const raw = (stages as Record<string, unknown>)[stageId];
-    if (!raw || typeof raw !== 'object') return `stage "${stageId}" is required`;
-    const s = raw as Record<string, unknown>;
+  for (const raw of rawMachines) {
+    if (!raw || typeof raw !== 'object') return 'each machine must be an object';
+    const m = raw as Record<string, unknown>;
 
-    if (typeof s.enabled !== 'boolean') return `stage "${stageId}": enabled must be a boolean`;
-    if (s.gate !== 'auto' && s.gate !== 'approval') {
-      return `stage "${stageId}": gate must be "auto" or "approval"`;
+    if (typeof m.key !== 'string' || !MACHINE_KEY_PATTERN.test(m.key)) {
+      return 'machine key must be a lowercase slug (letters, digits, hyphens; max 64 chars)';
     }
-    if (s.promptTemplate !== undefined && typeof s.promptTemplate !== 'string') {
-      return `stage "${stageId}": promptTemplate must be a string`;
+    const label = `machine "${m.key}"`;
+    if (seenKeys.has(m.key)) return `${label}: duplicate key — keys must be unique on the line`;
+    seenKeys.add(m.key);
+    if (typeof m.name !== 'string' || !m.name.trim()) {
+      return `${label}: name is required`;
     }
-    if (s.provider !== undefined && s.provider !== 'claude' && s.provider !== 'cursor') {
-      return `stage "${stageId}": provider must be "claude" or "cursor"`;
+    if (m.gate !== 'auto' && m.gate !== 'approval') {
+      return `${label}: gate must be "auto" or "approval"`;
     }
-    if (s.commands !== undefined) {
-      if (!COMMAND_STAGES.has(stageId)) {
-        return `stage "${stageId}": commands are only supported on test/deploy/monitor`;
+    if (m.templateId !== undefined) {
+      if (typeof m.templateId !== 'string') return `${label}: templateId must be a string`;
+      // Unknown template ids are a clear 400 rather than a silent drop at
+      // save time; run-time prompt resolution still tolerates dangling ids.
+      if (!templateIds.has(m.templateId)) {
+        return `${label}: unknown templateId "${m.templateId}"`;
       }
-      if (!Array.isArray(s.commands) || s.commands.some((c) => typeof c !== 'string')) {
-        return `stage "${stageId}": commands must be an array of strings`;
-      }
     }
-    if (s.timeoutMs !== undefined && (typeof s.timeoutMs !== 'number' || s.timeoutMs <= 0)) {
-      return `stage "${stageId}": timeoutMs must be a positive number`;
-    }
-    // Unknown tool ids are a clear 400 rather than a silent drop at save
-    // time; run-time resolution still tolerates dangling ids defensively.
-    const skillsError = validateToolIds(s.skills, knownSkillIds, stageId, 'skills');
-    if (skillsError) return skillsError;
-    const serversError = validateToolIds(s.mcpServers, knownServerIds, stageId, 'mcpServers');
-    if (serversError) return serversError;
+    const behavior = parseMachineBehavior(m, store, label);
+    if (typeof behavior === 'string') return behavior;
 
-    const config: StageConfig = {
-      enabled: s.enabled,
-      gate: s.gate,
-      ...(s.promptTemplate !== undefined && s.promptTemplate !== ''
-        ? { promptTemplate: s.promptTemplate as string }
-        : {}),
-      ...(s.provider !== undefined ? { provider: s.provider } : {}),
-      ...(s.commands !== undefined
-        ? { commands: (s.commands as string[]).map((c) => c.trim()).filter((c) => c.length > 0) }
-        : {}),
-      ...(s.timeoutMs !== undefined ? { timeoutMs: s.timeoutMs as number } : {}),
-      ...(Array.isArray(s.skills) && s.skills.length > 0
-        ? { skills: s.skills as string[] }
-        : {}),
-      ...(Array.isArray(s.mcpServers) && s.mcpServers.length > 0
-        ? { mcpServers: s.mcpServers as string[] }
-        : {}),
-    };
-
-    if (stageId === 'monitor') {
-      if (
-        s.intervalMinutes !== undefined &&
-        (typeof s.intervalMinutes !== 'number' || s.intervalMinutes < 1)
-      ) {
-        return 'stage "monitor": intervalMinutes must be a number >= 1';
-      }
-      if (s.maxChecks !== undefined && (typeof s.maxChecks !== 'number' || s.maxChecks < 1)) {
-        return 'stage "monitor": maxChecks must be a number >= 1';
-      }
-      const monitor: MonitorStageConfig = {
-        ...config,
-        ...(s.intervalMinutes !== undefined ? { intervalMinutes: s.intervalMinutes as number } : {}),
-        ...(s.maxChecks !== undefined ? { maxChecks: s.maxChecks as number } : {}),
-      };
-      parsedStages.monitor = monitor;
-    } else {
-      parsedStages[stageId] = config;
-    }
+    machines.push({
+      key: m.key,
+      name: m.name.trim(),
+      gate: m.gate,
+      ...(m.templateId !== undefined ? { templateId: m.templateId } : {}),
+      ...behavior,
+    });
   }
 
   return {
     projectId,
-    stages: parsedStages as PipelineConfig['stages'],
+    machines,
     updatedAt: new Date().toISOString(),
   };
-}
-
-function validateToolIds(
-  raw: unknown,
-  known: ReadonlySet<string>,
-  stageId: PipelineStageId,
-  field: 'skills' | 'mcpServers',
-): string | undefined {
-  if (raw === undefined) return undefined;
-  if (!Array.isArray(raw) || raw.some((id) => typeof id !== 'string')) {
-    return `stage "${stageId}": ${field} must be an array of strings`;
-  }
-  const unknown = (raw as string[]).find((id) => !known.has(id));
-  if (unknown !== undefined) {
-    return `stage "${stageId}": unknown ${field} id "${unknown}"`;
-  }
-  return undefined;
 }

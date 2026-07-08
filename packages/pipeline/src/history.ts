@@ -1,4 +1,4 @@
-import type { HubPaths, ISODateString, PipelineStageId, WorkItem } from '@claude-hub/core';
+import type { HubPaths, ISODateString, WorkItem } from '@claude-hub/core';
 import { appendFile, mkdir, readFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
@@ -7,11 +7,16 @@ import { dirname } from 'node:path';
  *   - one file per work item with a record per stage execution (full
  *     prompts/outputs — the live WorkItem only keeps truncated output)
  *   - one file per project archiving terminal (done/cancelled) work items
+ *
+ * Records written by pre-v7 stores use the six built-in stage ids as
+ * `stage` values; those remain valid machine keys post-migration, so old
+ * files are readable as-is and are never rewritten.
  */
 
 export interface StageRunRecord {
   workItemId: string;
-  stage: PipelineStageId;
+  /** Machine key (pre-v7: stage id — same values for built-ins). */
+  stage: string;
   status: 'success' | 'failed' | 'interrupted';
   startedAt: ISODateString;
   finishedAt: ISODateString;

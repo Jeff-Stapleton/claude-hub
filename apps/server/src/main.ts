@@ -20,6 +20,7 @@ import { registerActivityRoutes } from './routes/activity.js';
 import { registerChannelRoutes } from './routes/channels.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerGitRoutes } from './routes/git.js';
+import { registerMachineTemplateRoutes } from './routes/machineTemplates.js';
 import { registerOrchestratorRoutes } from './routes/orchestrator.js';
 import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerProjectRoutes } from './routes/projects.js';
@@ -173,6 +174,7 @@ async function main(): Promise<void> {
   await registerPipelineRoutes(app, store, pipelineRunner);
   await registerChannelRoutes(app, store);
   await registerToolboxRoutes(app, store);
+  await registerMachineTemplateRoutes(app, store);
   await registerVaultRoutes(app, store);
   await registerActivityRoutes(app, store);
   await registerOrchestratorRoutes(app, store);

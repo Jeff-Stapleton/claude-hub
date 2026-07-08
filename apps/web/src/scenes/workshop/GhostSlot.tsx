@@ -5,10 +5,10 @@ import { Workstation } from './Workstation.jsx';
 const GHOST_H = 0.95;
 
 /**
- * The "+" ghost slot on a lane: a translucent dashed machine outline
- * straddling the belt at the next empty stage slot, tunnel mouth included
- * so it previews the installed silhouette. Clicking it opens the
- * add-machine picker.
+ * The ghost machine previewed inside a hovered belt gap: a translucent
+ * dashed machine outline straddling the belt, tunnel mouth included so it
+ * previews the installed silhouette. Clicking it opens the add-machine
+ * picker at that gap's insertion index.
  */
 export function GhostSlot({
   x,
@@ -35,7 +35,7 @@ export function GhostSlot({
   ];
 
   return (
-    <Workstation label={`Add a machine to ${projectLabel}'s line`} onActivate={onActivate}>
+    <Workstation label={`Insert a machine here on ${projectLabel}'s line`} onActivate={onActivate}>
       <polygon points={poly(...leftFace)} {...dash} />
       <polygon points={poly(...rightFace)} {...dash} />
       <polygon points={poly(...topFace)} {...dash} />
@@ -44,7 +44,7 @@ export function GhostSlot({
         +
       </text>
       <text x={hint.x} y={hint.y} textAnchor="middle" fontSize={8} fontFamily="monospace" fill="#8a7458">
-        ADD MACHINE
+        INSERT MACHINE
       </text>
     </Workstation>
   );

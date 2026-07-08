@@ -3,30 +3,27 @@ import {
   render,
   type AgentProviderId,
   type McpTransport,
-  type PipelineStageId,
+  type PipelineMachine,
   type Project,
-  type StageConfig,
   type Store,
   type WorkItem,
 } from '@claude-hub/core';
 import { runCommands } from './commands.js';
 import {
-  DEFAULT_STAGE_TEMPLATES,
-  MONITOR_FAIL_MARKER,
-  MONITOR_PASS_MARKER,
-  TEST_FAIL_MARKER,
+  LEGACY_FAIL_MARKERS,
+  LEGACY_PASS_MARKERS,
+  MACHINE_FAIL_MARKER,
+  MACHINE_PASS_MARKER,
+  findMachineTemplate,
 } from './defaults.js';
 
 /** Live WorkItem stage output cap; full text goes to JSONL history. */
 export const STAGE_OUTPUT_LIMIT = 32_000;
 
-/** Stages where `commands` are honored and an explicit template is optional. */
-const COMMAND_STAGES: ReadonlySet<PipelineStageId> = new Set(['test', 'deploy', 'monitor']);
-
 export interface ExecuteStageDeps {
   store: Store;
   agentRunner: AgentRunner;
-  /** Fallback when the stage config has no timeoutMs. */
+  /** Fallback when the machine config has no timeoutMs. */
   defaultTimeoutMs?: number;
 }
 
@@ -42,35 +39,45 @@ export interface ExecuteStageResult {
 }
 
 /**
- * Executes one stage of a work item: an agent run (templated), then shell
- * commands for test/deploy/monitor stages. Both must succeed. A stage on a
- * command-capable station configured with commands but no explicit template
- * runs commands only.
+ * Executes one machine of a work item: an agent run (templated), then the
+ * machine's shell commands, if any. Both must succeed. A machine configured
+ * with commands but no prompt template (own or via its template) runs
+ * commands only.
  *
  * Pure with respect to the store — the caller persists all state changes.
  */
-export async function executeStage(
+export async function executeMachine(
   deps: ExecuteStageDeps,
   item: WorkItem,
-  stageId: PipelineStageId,
-  cfg: StageConfig,
+  machine: PipelineMachine,
+  machines: readonly PipelineMachine[],
   project: Project,
 ): Promise<ExecuteStageResult> {
   const projectPath = project.path;
-  const timeoutMs = cfg.timeoutMs ?? deps.defaultTimeoutMs ?? deps.store.config().triggerTimeoutMs;
-  const hasCommands = COMMAND_STAGES.has(stageId) && (cfg.commands?.length ?? 0) > 0;
-  // Commands-only stations skip the agent run unless a template is set.
-  const runAgent = cfg.promptTemplate !== undefined || !hasCommands;
+  const timeoutMs =
+    machine.timeoutMs ?? deps.defaultTimeoutMs ?? deps.store.config().triggerTimeoutMs;
+  const hasCommands = (machine.commands?.length ?? 0) > 0;
+  const template =
+    machine.promptTemplate ?? findMachineTemplate(deps.store, machine.templateId)?.promptTemplate;
+  if (template === undefined && !hasCommands) {
+    return {
+      ok: false,
+      output: '',
+      error: `machine "${machine.key}" has no prompt template and no commands`,
+    };
+  }
+  // Commands-only machines skip the agent run.
+  const runAgent = template !== undefined;
 
   const outputs: string[] = [];
   let prompt: string | undefined;
   let session: ExecuteStageResult['session'];
+  const tools = resolveToolAssignments(deps.store, machine, project);
 
   if (runAgent) {
-    const template = cfg.promptTemplate ?? DEFAULT_STAGE_TEMPLATES[stageId];
-    const rendered = render(template, buildContext(item));
+    const rendered = render(template, buildContext(item, machine, machines));
     prompt = buildProjectPreamble(project) + rendered;
-    const provider = cfg.provider ?? deps.store.config().defaultProvider;
+    const provider = machine.provider ?? deps.store.config().defaultProvider;
     const sessionId = item.sessions?.[provider];
 
     const result = await deps.agentRunner.runProjectSession({
@@ -79,7 +86,7 @@ export async function executeStage(
       prompt,
       ...(sessionId !== undefined ? { sessionId } : {}),
       timeoutMs,
-      tools: resolveToolAssignments(deps.store, stageId, cfg, project),
+      tools,
     });
 
     if (!result.ok) {
@@ -94,14 +101,18 @@ export async function executeStage(
     outputs.push(result.text);
     session = { provider, sessionId: result.sessionId };
 
-    const markerError = checkResultMarker(stageId, result.text);
+    const markerError = checkResultMarker(machine.resultCheck, result.text);
     if (markerError) {
       return { ok: false, output: outputs.join('\n\n'), prompt, error: markerError, session };
     }
   }
 
   if (hasCommands) {
-    const cmdResult = await runCommands(cfg.commands ?? [], { cwd: projectPath, timeoutMs });
+    const cmdResult = await runCommands(machine.commands ?? [], {
+      cwd: projectPath,
+      timeoutMs,
+      ...(tools.env !== undefined ? { env: tools.env } : {}),
+    });
     outputs.push(cmdResult.output);
     if (!cmdResult.ok) {
       const reason = cmdResult.timedOut
@@ -126,7 +137,7 @@ export async function executeStage(
 }
 
 /**
- * Project name/vision/context rendered ahead of every stage prompt so each
+ * Project name/vision/context rendered ahead of every machine prompt so each
  * machine works with the project's guiding intent. Provider-agnostic (plain
  * prompt text), and empty for migrated projects with no vision or context —
  * those runs behave exactly as before.
@@ -146,26 +157,28 @@ export function buildProjectPreamble(project: Project): string {
 /**
  * Resolves toolbox assignments (ids) to full definitions for the agent
  * runner: the union of project-level assignments (shared by every machine
- * in the lane) and the stage's own. Always returns a payload —
+ * in the lane) and the machine's own. Always returns a payload —
  * present-but-empty keeps runs deny-by-default (strict MCP config). Ids
  * whose tool has since been deleted are dropped with a warning rather than
- * failing the stage.
+ * failing the machine.
+ *
+ * The machine's own requiredEnv (its "variables") joins the assigned tools'
+ * required keys, so those vault values reach the run env too.
  */
 function resolveToolAssignments(
   store: Store,
-  stageId: PipelineStageId,
-  cfg: StageConfig,
+  machine: PipelineMachine,
   project: Project,
 ): RunToolAssignments {
   const toolbox = store.toolbox();
-  const skillIds = [...new Set([...(project.skills ?? []), ...(cfg.skills ?? [])])];
-  const serverIds = [...new Set([...(project.mcpServers ?? []), ...(cfg.mcpServers ?? [])])];
+  const skillIds = [...new Set([...(project.skills ?? []), ...(machine.skills ?? [])])];
+  const serverIds = [...new Set([...(project.mcpServers ?? []), ...(machine.mcpServers ?? [])])];
   const skills: RunToolAssignments['skills'] = [];
-  const requiredKeys = new Set<string>();
+  const requiredKeys = new Set<string>(machine.requiredEnv ?? []);
   for (const id of skillIds) {
     const skill = toolbox.skills.find((s) => s.id === id);
     if (!skill) {
-      console.warn(`[pipeline] stage "${stageId}": assigned skill ${id} no longer exists`);
+      console.warn(`[pipeline] machine "${machine.key}": assigned skill ${id} no longer exists`);
       continue;
     }
     for (const key of skill.requiredEnv ?? []) requiredKeys.add(key);
@@ -175,7 +188,9 @@ function resolveToolAssignments(
   for (const id of serverIds) {
     const server = toolbox.mcpServers.find((m) => m.id === id);
     if (!server) {
-      console.warn(`[pipeline] stage "${stageId}": assigned MCP server ${id} no longer exists`);
+      console.warn(
+        `[pipeline] machine "${machine.key}": assigned MCP server ${id} no longer exists`,
+      );
       continue;
     }
     for (const key of server.requiredEnv ?? []) requiredKeys.add(key);
@@ -186,17 +201,17 @@ function resolveToolAssignments(
     });
   }
 
-  // Vault values for the assigned tools' required keys only — an unassigned
-  // tool's secrets never reach the run. Unset keys warn but don't fail the
-  // stage: the vault lamp is the pre-run signal, and a hard fail would
-  // punish optional integrations.
+  // Vault values for the required keys only — an unassigned tool's secrets
+  // never reach the run. Unset keys warn but don't fail the machine: the
+  // vault lamp is the pre-run signal, and a hard fail would punish optional
+  // integrations.
   const env: Record<string, string> = {};
   const vault = store.vault();
   for (const key of requiredKeys) {
     const entry = vault.find((e) => e.key === key);
     if (entry?.value == null) {
       console.warn(
-        `[pipeline] stage "${stageId}": required vault key ${key} is ` +
+        `[pipeline] machine "${machine.key}": required vault key ${key} is ` +
           `${entry ? 'unset' : 'missing'} — run continues without it`,
       );
       continue;
@@ -254,31 +269,52 @@ export function resolveTransportSecrets(
 }
 
 /**
- * Template context for stage prompts: the request plus every prior stage's
- * (truncated) output, so templates can reference `{{stages.spec.output}}`.
+ * Template context for machine prompts: the request, every recorded
+ * machine's (truncated) output keyed by machine key
+ * (`{{stages.<key>.output}}`), and `previous` — the nearest preceding
+ * machine in line order with a non-empty recorded output, so a
+ * commands-only machine in between doesn't blank the context.
  */
-export function buildContext(item: WorkItem): Record<string, unknown> {
+export function buildContext(
+  item: WorkItem,
+  machine: PipelineMachine,
+  machines: readonly PipelineMachine[],
+): Record<string, unknown> {
   const stages: Record<string, { output: string }> = {};
-  for (const [id, result] of Object.entries(item.stages)) {
-    stages[id] = { output: result.output ?? '' };
+  for (const [key, result] of Object.entries(item.stages)) {
+    stages[key] = { output: result.output ?? '' };
   }
-  return { request: item.request, title: item.title, source: item.source, stages };
+  const idx = machines.findIndex((m) => m.key === machine.key);
+  let previous = { output: '' };
+  for (let i = idx - 1; i >= 0; i--) {
+    const out = item.stages[machines[i]!.key]?.output;
+    if (out) {
+      previous = { output: out };
+      break;
+    }
+  }
+  return { request: item.request, title: item.title, source: item.source, stages, previous };
 }
 
 /**
- * The test and monitor agents self-report via marker lines. Monitor is
- * strict (missing marker = fail — an unattended health check must be
- * unambiguous); test is lenient so custom templates without the marker
- * convention still work.
+ * resultCheck machines self-report via marker lines. 'strict' requires an
+ * explicit PASS (an unattended health check must be unambiguous); 'lenient'
+ * fails only on an explicit FAIL, so custom templates without the marker
+ * convention still work. Legacy TEST_RESULT/MONITOR_RESULT markers are
+ * honored for prompts migrated from pre-v7 stores.
  */
-function checkResultMarker(stageId: PipelineStageId, text: string): string | undefined {
-  if (stageId === 'monitor') {
-    if (text.includes(MONITOR_FAIL_MARKER)) return 'monitor check reported FAIL';
-    if (!text.includes(MONITOR_PASS_MARKER)) return 'monitor check did not report MONITOR_RESULT: PASS';
-    return undefined;
-  }
-  if (stageId === 'test' && text.includes(TEST_FAIL_MARKER)) {
-    return 'validation agent reported TEST_RESULT: FAIL';
+function checkResultMarker(
+  mode: 'strict' | 'lenient' | undefined,
+  text: string,
+): string | undefined {
+  if (!mode) return undefined;
+  const failed =
+    text.includes(MACHINE_FAIL_MARKER) || LEGACY_FAIL_MARKERS.some((m) => text.includes(m));
+  if (failed) return `machine reported ${MACHINE_FAIL_MARKER}`;
+  if (mode === 'strict') {
+    const passed =
+      text.includes(MACHINE_PASS_MARKER) || LEGACY_PASS_MARKERS.some((m) => text.includes(m));
+    if (!passed) return `machine did not report ${MACHINE_PASS_MARKER}`;
   }
   return undefined;
 }

@@ -66,7 +66,7 @@ export function RequestIntakeForm({
         </button>
         {noMachines ? (
           <div style={s.panelHint}>
-            this line has no machines — click the + slot on the lane to install one first
+            this line has no machines — hover the belt and click a ghost slot to install one first
           </div>
         ) : null}
         {error ? <div style={s.panelError}>{String(error)}</div> : null}

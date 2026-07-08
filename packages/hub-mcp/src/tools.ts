@@ -115,7 +115,7 @@ export function makeTools(ctx: ToolContext) {
 
     enqueue_work_request: {
       description:
-        'File a work request on a project’s assembly-line pipeline. The request flows through spec → code → test → deploy → monitor stages autonomously (subject to the project’s per-stage gates). Use this instead of spawn_session when the user is asking for a feature, fix, or change that should go through the full development pipeline.',
+        'File a work request on a project’s assembly-line pipeline. The request flows through the project’s configured machine line autonomously (subject to each machine’s gate). Use this instead of spawn_session when the user is asking for a feature, fix, or change that should go through the full development pipeline.',
       input: z
         .object({
           projectId: z.string(),

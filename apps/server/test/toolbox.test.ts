@@ -182,7 +182,7 @@ describe('toolbox routes', () => {
     expect(res.statusCode).toBe(400);
   });
 
-  it('DELETE scrubs the tool id from pipeline stage assignments', async () => {
+  it('DELETE scrubs the tool id from machine and template assignments', async () => {
     const create = await app.inject({
       method: 'POST',
       url: '/api/toolbox/skills',
@@ -192,23 +192,34 @@ describe('toolbox routes', () => {
     await store.update('pipelines', [
       {
         projectId: 'p1',
-        stages: {
-          intake: { enabled: true, gate: 'auto' as const },
-          spec: { enabled: true, gate: 'auto' as const, skills: [id, 'other-id'] },
-          code: { enabled: true, gate: 'auto' as const, skills: [id] },
-          test: { enabled: false, gate: 'auto' as const },
-          deploy: { enabled: false, gate: 'auto' as const },
-          monitor: { enabled: false, gate: 'auto' as const },
-        },
+        machines: [
+          { key: 'spec', name: 'Spec', gate: 'auto' as const, skills: [id, 'other-id'] },
+          { key: 'code', name: 'Code', gate: 'auto' as const, skills: [id] },
+        ],
+        updatedAt: new Date().toISOString(),
+      },
+    ]);
+    await store.update('machineTemplates', [
+      {
+        id: 't1',
+        slug: 'scanner',
+        name: 'Scanner',
+        description: 'x',
+        source: 'custom' as const,
+        defaultGate: 'auto' as const,
+        promptTemplate: 'scan',
+        skills: [id],
+        createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       },
     ]);
 
     const res = await app.inject({ method: 'DELETE', url: `/api/toolbox/skills/${id}` });
     expect(res.statusCode).toBe(200);
-    const stages = store.pipelines()[0]!.stages;
-    expect(stages.spec.skills).toEqual(['other-id']);
-    expect(stages.code.skills).toBeUndefined();
+    const machines = store.pipelines()[0]!.machines;
+    expect(machines[0]!.skills).toEqual(['other-id']);
+    expect(machines[1]!.skills).toBeUndefined();
+    expect(store.machineTemplates()[0]!.skills).toBeUndefined();
   });
 
   it('DELETE scrubs the tool id from project-level assignments too', async () => {
@@ -255,14 +266,11 @@ describe('pipeline PUT with tool assignments', () => {
   let store: Store;
   let root: string;
 
-  const baseStages = () => ({
-    intake: { enabled: true, gate: 'auto' },
-    spec: { enabled: true, gate: 'auto' },
-    code: { enabled: true, gate: 'auto' },
-    test: { enabled: false, gate: 'auto' },
-    deploy: { enabled: false, gate: 'auto' },
-    monitor: { enabled: false, gate: 'auto' },
-  });
+  const baseMachines = (): Record<string, unknown>[] => [
+    { key: 'intake', name: 'Intake', gate: 'auto' },
+    { key: 'spec', name: 'Spec', gate: 'auto' },
+    { key: 'code', name: 'Code', gate: 'auto' },
+  ];
 
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'toolbox-pipeline-'));
@@ -272,7 +280,8 @@ describe('pipeline PUT with tool assignments', () => {
       { id: 'p1', path: '/tmp/proj', addedAt: new Date().toISOString() },
     ]);
     app = Fastify();
-    await registerPipelineRoutes(app, store, {} as PipelineRunner);
+    const runnerStub = { reconcileLineEdit: async () => undefined } as unknown as PipelineRunner;
+    await registerPipelineRoutes(app, store, runnerStub);
     await registerToolboxRoutes(app, store);
     await app.ready();
   });
@@ -290,27 +299,27 @@ describe('pipeline PUT with tool assignments', () => {
     });
     const skillId = JSON.parse(skillRes.body).id;
 
-    const stages = baseStages() as Record<string, Record<string, unknown>>;
-    stages.spec!.skills = [skillId];
-    stages.code!.skills = [];
+    const machines = baseMachines();
+    machines[1]!.skills = [skillId];
+    machines[2]!.skills = [];
     const res = await app.inject({
       method: 'PUT',
       url: '/api/projects/p1/pipeline',
-      payload: { stages },
+      payload: { machines },
     });
     expect(res.statusCode).toBe(200);
-    const saved = store.pipelines()[0]!.stages;
-    expect(saved.spec.skills).toEqual([skillId]);
-    expect(saved.code.skills).toBeUndefined();
+    const saved = store.pipelines()[0]!.machines;
+    expect(saved[1]!.skills).toEqual([skillId]);
+    expect(saved[2]!.skills).toBeUndefined();
   });
 
   it('rejects unknown tool ids with a 400', async () => {
-    const stages = baseStages() as Record<string, Record<string, unknown>>;
-    stages.spec!.mcpServers = ['no-such-id'];
+    const machines = baseMachines();
+    machines[1]!.mcpServers = ['no-such-id'];
     const res = await app.inject({
       method: 'PUT',
       url: '/api/projects/p1/pipeline',
-      payload: { stages },
+      payload: { machines },
     });
     expect(res.statusCode).toBe(400);
     expect(JSON.parse(res.body).error).toMatch(/unknown mcpServers id/);

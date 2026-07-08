@@ -145,9 +145,10 @@ export interface OrchestratorState {
 // Pipelines / work items (assembly line)
 // ---------------------------------------------------------------------------
 
-export type PipelineStageId = 'intake' | 'spec' | 'code' | 'test' | 'deploy' | 'monitor';
+/** The six built-in machine template slugs (fixed visual variants). */
+export type BuiltinMachineSlug = 'intake' | 'spec' | 'code' | 'test' | 'deploy' | 'monitor';
 
-export const PIPELINE_STAGE_ORDER: readonly PipelineStageId[] = [
+export const BUILTIN_MACHINE_SLUGS: readonly BuiltinMachineSlug[] = [
   'intake',
   'spec',
   'code',
@@ -156,23 +157,55 @@ export const PIPELINE_STAGE_ORDER: readonly PipelineStageId[] = [
   'monitor',
 ];
 
+export const builtinTemplateId = (slug: BuiltinMachineSlug): string => `builtin-${slug}`;
+
 export type StageGate = 'auto' | 'approval';
 
-export interface StageConfig {
-  enabled: boolean;
-  gate: StageGate;
+export interface MachineMonitorConfig {
+  intervalMinutes?: number;
+  maxChecks?: number;
+}
+
+/** Shared by templates (as defaults) and installed machines (as actuals). */
+export interface MachineBehavior {
+  /** Absent on an instance = fall back to the template's prompt. */
   promptTemplate?: string;
   provider?: AgentProviderId;
+  /** Shell commands run after the agent; any machine may have them. */
   commands?: string[];
   timeoutMs?: number;
-  /** Monitor stage only. */
-  intervalMinutes?: number;
-  /** Monitor stage only. */
-  maxChecks?: number;
   /** Toolbox skill ids this machine may use. Absent/empty = none. */
   skills?: string[];
   /** Toolbox MCP server ids this machine may use. Absent/empty = none. */
   mcpServers?: string[];
+  /** Vault keys injected as env — the machine's "variables". */
+  requiredEnv?: string[];
+  /** Agent self-report marker check. Absent = no check. */
+  resultCheck?: 'strict' | 'lenient';
+  /** Presence turns the machine into a scheduled re-check loop. */
+  monitor?: MachineMonitorConfig;
+}
+
+/** A reusable machine definition (built-in or user-saved). */
+export interface MachineTemplate extends MachineBehavior {
+  id: string;
+  slug: string;
+  name: string;
+  description: string;
+  source: 'builtin' | 'custom';
+  defaultGate: StageGate;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** One installed machine on a project's line. */
+export interface PipelineMachine extends MachineBehavior {
+  /** Unique-in-line slug; immutable identity (results, approvals, prompts). */
+  key: string;
+  /** Display name; renames freely. */
+  name: string;
+  templateId?: string;
+  gate: StageGate;
 }
 
 // ---------------------------------------------------------------------------
@@ -217,7 +250,7 @@ export interface Toolbox {
 export interface RedactedVaultEntry {
   key: string;
   valueSet: boolean;
-  requiredBy: { skills: string[]; mcpServers: string[] };
+  requiredBy: { skills: string[]; mcpServers: string[]; machineTemplates?: string[] };
   createdAt: string;
   updatedAt: string;
 }
@@ -229,7 +262,8 @@ export type McpTransportInput =
 
 export interface PipelineConfig {
   projectId: string;
-  stages: Record<PipelineStageId, StageConfig>;
+  /** Ordered machine instances; empty = blank line. */
+  machines: PipelineMachine[];
   updatedAt: string;
 }
 
@@ -269,9 +303,11 @@ export interface WorkItem {
   source: WorkItemSource;
   sourceRef?: string;
   status: WorkItemStatus;
-  currentStage: PipelineStageId;
-  stages: Record<PipelineStageId, StageResult>;
-  approvedStages?: PipelineStageId[];
+  /** Key of the machine the item is currently at. */
+  currentStage: string;
+  /** Results keyed by machine key. */
+  stages: Record<string, StageResult>;
+  approvedStages?: string[];
   createdAt: string;
   updatedAt: string;
   finishedAt?: string;
@@ -288,6 +324,8 @@ export interface UIState {
   workItems?: WorkItem[];
   /** Optional so payloads from a pre-toolbox server still render. */
   toolbox?: Toolbox;
+  /** Built-in + saved custom machine templates; optional for older servers. */
+  machineTemplates?: MachineTemplate[];
   /** Optional so payloads from a pre-git-credentials server still render. */
   gitCredentials?: RedactedGitCredential[];
   /** Optional so payloads from a pre-vault server still render. */

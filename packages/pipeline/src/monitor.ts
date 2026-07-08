@@ -42,8 +42,13 @@ export class MonitorScheduler {
     const seen = new Set<string>();
     for (const item of monitoring) {
       seen.add(item.id);
-      const cfg = effectivePipelineConfig(this.store, item.projectId).stages.monitor;
-      const minutes = cfg.intervalMinutes ?? DEFAULT_MONITOR_INTERVAL_MINUTES;
+      const machine = effectivePipelineConfig(this.store, item.projectId).machines.find(
+        (m) => m.key === item.currentStage,
+      );
+      // A removed machine (or a removed monitor loop) still gets one timer:
+      // the next tick's runMonitorCheck owns failing/re-queuing the item,
+      // keeping that logic in one place.
+      const minutes = machine?.monitor?.intervalMinutes ?? DEFAULT_MONITOR_INTERVAL_MINUTES;
       const intervalMs = Math.max(1, minutes) * 60_000;
 
       if (this.intervals.get(item.id) === intervalMs) continue; // already armed

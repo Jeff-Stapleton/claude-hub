@@ -178,8 +178,8 @@ function guardMutable(reply: FastifyReply, skill: ToolboxSkill | undefined): unk
 }
 
 /**
- * Removes a deleted tool id from every stored pipeline stage assignment and
- * from every project-level assignment.
+ * Removes a deleted tool id from every installed machine, every custom
+ * machine template, and every project-level assignment.
  */
 async function scrubAssignments(
   store: Store,
@@ -201,26 +201,42 @@ async function scrubAssignments(
     );
   }
 
-  const affected = store
+  const pipelinesAffected = store
     .pipelines()
-    .some((p) => Object.values(p.stages).some((s) => s[field]?.includes(toolId)));
-  if (!affected) return;
-  await store.update('pipelines', (current) =>
-    current.map((pipeline) => ({
-      ...pipeline,
-      stages: Object.fromEntries(
-        Object.entries(pipeline.stages).map(([stageId, stage]) => {
-          const ids: string[] | undefined = stage[field];
-          if (!ids?.includes(toolId)) return [stageId, stage];
+    .some((p) => p.machines.some((m) => m[field]?.includes(toolId)));
+  if (pipelinesAffected) {
+    await store.update('pipelines', (current) =>
+      current.map((pipeline) => ({
+        ...pipeline,
+        machines: pipeline.machines.map((machine) => {
+          const ids = machine[field];
+          if (!ids?.includes(toolId)) return machine;
           const remaining = ids.filter((id) => id !== toolId);
-          const next = { ...stage };
+          const next = { ...machine };
           if (remaining.length > 0) next[field] = remaining;
           else delete next[field];
-          return [stageId, next];
+          return next;
         }),
-      ) as typeof pipeline.stages,
-    })),
-  );
+      })),
+    );
+  }
+
+  const templatesAffected = store
+    .machineTemplates()
+    .some((t) => t[field]?.includes(toolId));
+  if (templatesAffected) {
+    await store.update('machineTemplates', (current) =>
+      current.map((template) => {
+        const ids = template[field];
+        if (!ids?.includes(toolId)) return template;
+        const remaining = ids.filter((id) => id !== toolId);
+        const next = { ...template };
+        if (remaining.length > 0) next[field] = remaining;
+        else delete next[field];
+        return next;
+      }),
+    );
+  }
 }
 
 function parseSkillBody(

@@ -196,36 +196,49 @@ export interface TriggerRun {
 // ---------------------------------------------------------------------------
 
 /**
- * The six fixed assembly-line stages, in execution order. Stages cannot be
- * reordered or added to; each can be toggled on/off per project.
+ * A project's line is an ordered array of machine instances, stamped from
+ * templates. The six classic stages survive as built-in templates; users
+ * can install any mix, in any order, including duplicates.
  */
-export type PipelineStageId = 'intake' | 'spec' | 'code' | 'test' | 'deploy' | 'monitor';
+export const BUILTIN_MACHINE_SLUGS = ['intake', 'spec', 'code', 'test', 'deploy', 'monitor'] as const;
+export type BuiltinMachineSlug = (typeof BUILTIN_MACHINE_SLUGS)[number];
 
-export const PIPELINE_STAGE_ORDER: readonly PipelineStageId[] = [
-  'intake',
-  'spec',
-  'code',
-  'test',
-  'deploy',
-  'monitor',
-];
+/** Stable template id for a built-in machine template. */
+export const builtinTemplateId = (slug: BuiltinMachineSlug): string => `builtin-${slug}`;
+
+/** Machine instance keys and template slugs: same shape as TOOLBOX_NAME_PATTERN. */
+export const MACHINE_KEY_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/;
 
 /**
- * Gate applied BEFORE a stage executes. `'approval'` parks the work item
+ * Gate applied BEFORE a machine executes. `'approval'` parks the work item
  * until a human approves it via the UI/API; `'auto'` advances immediately.
  */
 export type StageGate = 'auto' | 'approval';
 
-export interface StageConfig {
-  enabled: boolean;
-  gate: StageGate;
-  /** Falls back to the built-in default template for the stage. */
+export interface MachineMonitorConfig {
+  /** Minutes between checks. Default 30. */
+  intervalMinutes?: number;
+  /** Consecutive passing checks required to complete the machine. Default 3. */
+  maxChecks?: number;
+}
+
+/**
+ * Config shared by templates (as defaults) and machine instances (as
+ * actuals). Capability fields (commands, resultCheck, monitor) are
+ * materialized onto instances at install time; the only runtime fallbacks
+ * are promptTemplate (template chain) and provider/timeoutMs (app config).
+ */
+export interface MachineBehavior {
+  /**
+   * Absent on an instance = fall back to the template's prompt. Absent
+   * everywhere with commands present = commands-only machine.
+   */
   promptTemplate?: string;
   /** Falls back to config.defaultProvider. */
   provider?: AgentProviderId;
   /**
-   * Shell commands run sequentially in the project cwd. Honored for
-   * test/deploy/monitor stages only; execution stops at the first failure.
+   * Shell commands run sequentially in the project cwd after the agent run.
+   * Any machine may have them; execution stops at the first failure.
    */
   commands?: string[];
   /** Falls back to config.triggerTimeoutMs. */
@@ -237,27 +250,66 @@ export interface StageConfig {
   skills?: string[];
   /** Toolbox MCP server ids this machine may use. Deny-by-default like skills. */
   mcpServers?: string[];
+  /**
+   * Vault keys (VAULT_KEY_PATTERN) injected as env into the agent run and
+   * shell commands — the machine's "variables".
+   */
+  requiredEnv?: string[];
+  /**
+   * Agent self-report marker check. 'strict' = the run must print
+   * `MACHINE_RESULT: PASS`; 'lenient' = fails only on an explicit FAIL
+   * marker. Absent = no check.
+   */
+  resultCheck?: 'strict' | 'lenient';
+  /** Presence turns the machine into a scheduled re-check loop. */
+  monitor?: MachineMonitorConfig;
 }
 
-export interface MonitorStageConfig extends StageConfig {
-  /** Minutes between monitor checks. Default 30. */
-  intervalMinutes?: number;
-  /** Consecutive passing checks required to mark the item done. Default 3. */
-  maxChecks?: number;
+/**
+ * A reusable machine definition. Built-ins are code constants (never
+ * stored); custom templates live in the machineTemplates store file.
+ */
+export interface MachineTemplate extends MachineBehavior {
+  /** `builtin-<slug>` for built-ins; uuid for customs. */
+  id: string;
+  /** Default instance-key base (MACHINE_KEY_PATTERN). Unique across templates. */
+  slug: string;
+  /** Display name, e.g. "Code" or "Security scan". */
+  name: string;
+  description: string;
+  source: 'builtin' | 'custom';
+  /** Gate stamped onto new instances (built-in deploy defaults to 'approval'). */
+  defaultGate: StageGate;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
 }
 
-export interface PipelineStages {
-  intake: StageConfig;
-  spec: StageConfig;
-  code: StageConfig;
-  test: StageConfig;
-  deploy: StageConfig;
-  monitor: MonitorStageConfig;
+/**
+ * One installed machine on a project's line. Self-contained config except
+ * the promptTemplate fallback to its template.
+ */
+export interface PipelineMachine extends MachineBehavior {
+  /**
+   * Unique-in-line slug (MACHINE_KEY_PATTERN); duplicates auto-suffix
+   * (`code`, `code-2`). Serves as the WorkItem.stages record key, the
+   * prompt-context key (`{{stages.<key>.output}}`), and the approval id.
+   * Immutable — a changed key is a new machine identity.
+   */
+  key: string;
+  /** Display name; renames freely without touching the key. */
+  name: string;
+  /**
+   * Provenance + prompt fallback. Deleting a custom template snapshots its
+   * prompt into instances and clears this.
+   */
+  templateId?: string;
+  gate: StageGate;
 }
 
 export interface PipelineConfig {
   projectId: string;
-  stages: PipelineStages;
+  /** Ordered machine instances; empty = blank line (enqueue rejects). */
+  machines: PipelineMachine[];
   updatedAt: ISODateString;
 }
 
@@ -291,7 +343,7 @@ export interface StageResult {
   /** Final agent text / command output, truncated. Full text lives in JSONL. */
   output?: string;
   error?: string;
-  /** Consecutive passing monitor checks so far. Monitor stage only. */
+  /** Consecutive passing checks so far. Machines with a monitor loop only. */
   checksPassed?: number;
 }
 
@@ -305,15 +357,17 @@ export interface WorkItem {
   /** triggerId | channel conversation key | failed work item id (monitor defects). */
   sourceRef?: string;
   status: WorkItemStatus;
-  currentStage: PipelineStageId;
-  stages: Record<PipelineStageId, StageResult>;
+  /** Key of the machine the item is currently at. */
+  currentStage: string;
+  /** Results keyed by machine key. Machines never run for this item may be absent. */
+  stages: Record<string, StageResult>;
   /**
    * Provider session ids resumed across stages, keyed by provider so a
    * Claude session id is never fed to Cursor or vice versa.
    */
   sessions?: Partial<Record<AgentProviderId, string>>;
-  /** Approval-gated stages a human has approved. Survives restarts. */
-  approvedStages?: PipelineStageId[];
+  /** Keys of approval-gated machines a human has approved. Survives restarts. */
+  approvedStages?: string[];
   createdAt: ISODateString;
   updatedAt: ISODateString;
   finishedAt?: ISODateString;
@@ -448,7 +502,7 @@ export type AgentProviderConfigs = {
  * file lands; the store refuses to load mismatched versions to avoid silent
  * data corruption.
  */
-export const STORE_SCHEMA_VERSION = 6;
+export const STORE_SCHEMA_VERSION = 7;
 
 export interface AppConfig {
   schemaVersion: number;
@@ -485,6 +539,8 @@ export interface StoreSnapshot {
   /** Live work items only (queued/running/waiting/monitoring/failed); terminal items are archived to JSONL. */
   workItems: WorkItem[];
   toolbox: Toolbox;
+  /** Custom machine templates only; built-ins are code constants. */
+  machineTemplates: MachineTemplate[];
   gitCredentials: GitCredential[];
   vault: VaultEntry[];
 }

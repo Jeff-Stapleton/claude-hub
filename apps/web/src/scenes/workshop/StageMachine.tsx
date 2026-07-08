@@ -1,19 +1,19 @@
-import type { PipelineStageId, StageConfig, StageRunStatus } from '../../types.js';
+import type { BuiltinMachineSlug, PipelineMachine, StageRunStatus } from '../../types.js';
 import { UNIT_Z, iso, isoBoxPoints, poly } from '../iso.js';
 import {
   BELT_H,
   MACHINE_BELT_OFFSET,
   SLOT_D,
   SLOT_W,
-  STAGE_META,
   TUNNEL_CLEAR,
   TUNNEL_H,
+  machineLabel,
 } from './layout.js';
 import { Workstation } from './Workstation.jsx';
 
-/** Per-stage silhouette: height + palette + topper so each machine reads. */
+/** Per-built-in silhouette: height + palette + topper so each machine reads. */
 const VARIANTS: Record<
-  PipelineStageId,
+  BuiltinMachineSlug,
   { h: number; top: string; right: string; left: string }
 > = {
   intake: { h: 1.15, top: '#6b5535', right: '#554026', left: '#3b2b1b' },
@@ -24,36 +24,62 @@ const VARIANTS: Record<
   monitor: { h: 1.3, top: '#535f4a', right: '#414a3a', left: '#2d3428' },
 };
 
+/** Which built-in template (if any) a machine was stamped from. */
+function builtinSlug(machine: PipelineMachine): BuiltinMachineSlug | undefined {
+  const slug = machine.templateId?.replace(/^builtin-/, '');
+  return machine.templateId?.startsWith('builtin-') && slug && slug in VARIANTS
+    ? (slug as BuiltinMachineSlug)
+    : undefined;
+}
+
+function hashKey(key: string): number {
+  let h = 0;
+  for (const c of key) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return h;
+}
+
 /**
- * One installed stage machine on a project's lane, parameterized by world
+ * Deterministic silhouette for custom machines: a muted hue keyed off the
+ * machine key, height inside the built-in range, so every custom machine
+ * is stable frame-to-frame and distinct from its neighbors while staying
+ * inside the scene's low-saturation palette.
+ */
+function customVariant(key: string): { h: number; top: string; right: string; left: string } {
+  const h = hashKey(key);
+  const hue = h % 360;
+  const height = 1.2 + ((h >>> 9) % 5) * 0.08;
+  const c = (l: number): string => `hsl(${hue} 18% ${l}%)`;
+  return { h: height, top: c(30), right: c(24), left: c(17) };
+}
+
+/**
+ * One installed machine on a project's lane, parameterized by world
  * position. The machine straddles the belt: a tunnel mouth is cut into its
  * -X face where the belt enters, and the belt re-emerges past the +X face
  * (hidden from the viewer), so work visibly goes in one side and comes out
  * the other. The whole body is a Workstation hotspot — clicking opens the
- * stage's config panel. The lamp above the screen reflects live activity.
+ * machine's config panel. The lamp above the screen reflects live activity.
  */
-export function StageMachine({
-  stage,
+export function Machine({
+  machine,
   x,
   y,
-  config,
   activity,
   selected,
   onSelect,
 }: {
-  stage: PipelineStageId;
+  machine: PipelineMachine;
   x: number;
   y: number;
-  config: StageConfig;
-  /** Live status of this stage across the project's work items. */
+  /** Live status of this machine across the project's work items. */
   activity: StageRunStatus | undefined;
   selected: boolean;
   onSelect: () => void;
 }): JSX.Element {
-  const variant = VARIANTS[stage];
-  const { topFace, rightFace, leftFace } = isoBoxPoints(x, y, SLOT_W, SLOT_D, variant.h);
-  const meta = STAGE_META[stage];
+  const slug = builtinSlug(machine);
+  const variant = slug ? VARIANTS[slug] : customVariant(machine.key);
   const running = activity === 'running';
+  const { topFace, rightFace, leftFace } = isoBoxPoints(x, y, SLOT_W, SLOT_D, variant.h);
 
   const screen = {
     a: iso(x + 0.16, y, variant.h * 0.5),
@@ -103,7 +129,7 @@ export function StageMachine({
             : '#3a3128';
 
   return (
-    <Workstation label={`${meta.label} station — configure`} onActivate={onSelect}>
+    <Workstation label={`${machine.name} machine — configure`} onActivate={onSelect}>
       <g
         style={{
           filter: selected ? 'drop-shadow(0 0 10px rgba(255, 210, 138, 0.9))' : undefined,
@@ -121,7 +147,7 @@ export function StageMachine({
             stroke={screenStroke}
             strokeWidth={1}
           />
-          <Topper stage={stage} x={x} y={y} h={variant.h} />
+          <Topper slug={slug} machineKey={machine.key} x={x} y={y} h={variant.h} />
         </g>
         <circle
           cx={lamp.x}
@@ -137,9 +163,9 @@ export function StageMachine({
           }
         />
         <text x={label.x} y={label.y} textAnchor="middle" fontSize={11} fontFamily="monospace" fill="#ead6b8">
-          {meta.label}
+          {machineLabel(machine)}
         </text>
-        {config.gate === 'approval' ? (
+        {machine.gate === 'approval' ? (
           <text x={label.x} y={label.y + 14} textAnchor="middle" fontSize={8} fontFamily="monospace" fill="#b48ad6">
             gated
           </text>
@@ -149,11 +175,23 @@ export function StageMachine({
   );
 }
 
-/** Small per-stage decoration so the six machines aren't identical boxes. */
-function Topper({ stage, x, y, h }: { stage: PipelineStageId; x: number; y: number; h: number }): JSX.Element {
+/** Small per-machine decoration so the machines aren't identical boxes. */
+function Topper({
+  slug,
+  machineKey,
+  x,
+  y,
+  h,
+}: {
+  slug: BuiltinMachineSlug | undefined;
+  machineKey: string;
+  x: number;
+  y: number;
+  h: number;
+}): JSX.Element {
   const cx = x + SLOT_W / 2;
   const cy = y + SLOT_D / 2;
-  switch (stage) {
+  switch (slug) {
     case 'intake': {
       // Hopper: a small open bin on top. isoBoxPoints projects at floor
       // level; raising world z by h is exactly a -h·UNIT_Z screen shift.
@@ -207,7 +245,36 @@ function Topper({ stage, x, y, h }: { stage: PipelineStageId; x: number; y: numb
         </g>
       );
     }
-    default:
+    case 'spec':
+    case 'code':
       return <></>;
+    default: {
+      // Custom machines: a deterministic small decoration by key hash so
+      // they read as distinct without a bespoke variant.
+      const pick = hashKey(machineKey) % 3;
+      if (pick === 0) {
+        // Vent box.
+        const vent = isoBoxPoints(cx - 0.25, cy - 0.2, 0.5, 0.4, 0.18);
+        return (
+          <g transform={`translate(0, ${-h * UNIT_Z})`} opacity={0.9}>
+            <polygon points={poly(...vent.leftFace)} fill="#2a2420" stroke="#15100c" strokeWidth={0.8} />
+            <polygon points={poly(...vent.rightFace)} fill="#3a322c" stroke="#15100c" strokeWidth={0.8} />
+            <polygon points={poly(...vent.topFace)} fill="#1c1814" stroke="#15100c" strokeWidth={0.8} />
+          </g>
+        );
+      }
+      if (pick === 1) {
+        // Short antenna.
+        const base = iso(cx + 0.2, cy, h);
+        const top = iso(cx + 0.2, cy, h + 0.4);
+        return (
+          <g>
+            <line x1={base.x} y1={base.y} x2={top.x} y2={top.y} stroke="#8a7458" strokeWidth={2} />
+            <circle cx={top.x} cy={top.y} r={2.4} fill="#c8a888" />
+          </g>
+        );
+      }
+      return <></>;
+    }
   }
 }

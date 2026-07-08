@@ -1,11 +1,16 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
-import { api, type CreateProjectBody, type RepoInput, type UpdateProjectBody } from '../api.js';
-import type { PipelineStageId, StageConfig, UIState } from '../types.js';
-import { PIPELINE_STAGE_ORDER } from '../types.js';
+import {
+  api,
+  type CreateProjectBody,
+  type MachineTemplateBody,
+  type RepoInput,
+  type UpdateProjectBody,
+} from '../api.js';
+import type { PipelineMachine, UIState } from '../types.js';
 import { DepthSorted, iso, poly, WALL_H, type SceneEntity } from './iso.js';
 import type { SceneId } from './useSceneRouter.js';
-import { AddStagePanel } from './workshop/AddStagePanel.jsx';
+import { AddMachinePanel } from './workshop/AddMachinePanel.jsx';
 import { ChannelsRadio } from './workshop/ChannelsRadio.jsx';
 import { CronClockWall } from './workshop/CronClockWall.jsx';
 import { DebugOverlay } from './workshop/DebugOverlay.jsx';
@@ -14,12 +19,12 @@ import { GhostLane } from './workshop/GhostLane.jsx';
 import {
   BELT_LOCAL_Y,
   CONSOLE_X,
-  FLOOR_W,
   HEAD_X,
   TOOLBOX_X,
   VAULT_X,
   consoleY,
   defaultPipeline,
+  floorWidth,
   ghostLaneY,
   laneY,
   sceneTransform,
@@ -27,12 +32,12 @@ import {
   vaultY,
   workshopFloorDepth,
 } from './workshop/layout.js';
+import { MachineConfigPanel } from './workshop/MachineConfigPanel.jsx';
 import { NewProjectWizard } from './workshop/NewProjectWizard.jsx';
 import { OrchestratorConsole } from './workshop/OrchestratorConsole.jsx';
 import { ProjectLane } from './workshop/ProjectLane.jsx';
 import { ProjectSettingsPanel } from './workshop/ProjectSettingsPanel.jsx';
 import { RequestIntakeForm } from './workshop/RequestIntakeForm.jsx';
-import { StationConfigPanel } from './workshop/StationConfigPanel.jsx';
 import { TimeCardWall } from './workshop/TimeCardWall.jsx';
 import { ToolboxCrate } from './workshop/ToolboxCrate.jsx';
 import { ToolboxPanel, type ToolboxAction } from './workshop/ToolboxPanel.jsx';
@@ -55,10 +60,10 @@ import { WorkItemPanel } from './workshop/WorkItemPanel.jsx';
  */
 
 type WorkshopSelection =
-  | { kind: 'stage'; projectId: string; stage: PipelineStageId }
+  | { kind: 'machine'; projectId: string; machineKey: string }
   | { kind: 'item'; itemId: string }
   | { kind: 'intake'; projectId: string }
-  | { kind: 'addStage'; projectId: string }
+  | { kind: 'addMachine'; projectId: string; insertIndex: number }
   | { kind: 'toolbox' }
   | { kind: 'vault' }
   | { kind: 'newProject' }
@@ -117,13 +122,16 @@ export function Workshop({
   });
 
   const saveMutation = useMutation({
-    mutationFn: ({
-      projectId,
-      stages,
-    }: {
-      projectId: string;
-      stages: Record<PipelineStageId, StageConfig>;
-    }) => api.savePipeline(projectId, { stages }),
+    mutationFn: ({ projectId, machines }: { projectId: string; machines: PipelineMachine[] }) =>
+      api.savePipeline(projectId, { machines }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
+
+  const templateMutation = useMutation({
+    mutationFn: (action: TemplateAction): Promise<unknown> =>
+      action.type === 'create'
+        ? api.createMachineTemplate(action.body)
+        : api.deleteMachineTemplate(action.id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
   });
 
@@ -185,10 +193,23 @@ export function Workshop({
   const activity = activityQuery.data ?? [];
   const projects = state.projects;
   const workItems = state.workItems ?? [];
+  const machineTemplates = state.machineTemplates ?? [];
 
-  const floorW = FLOOR_W;
-  // Depth includes the ghost lane's band, so the "add project" ghost always
-  // sits inside the room and each new project grows the floor along +Y.
+  const configFor = (projectId: string) => {
+    const stored = state.pipelines?.find((p) => p.projectId === projectId);
+    // Guard against a transient old-shape WS payload during server cutover.
+    return stored?.machines ? stored : defaultPipeline(projectId);
+  };
+
+  // Width is fixed until some lane exceeds the baseline machine count, then
+  // the room widens so machines keep their minimum spacing. Depth includes
+  // the ghost lane's band, so the "add project" ghost always sits inside
+  // the room and each new project grows the floor along +Y.
+  const maxMachines = projects.reduce(
+    (max, p) => Math.max(max, configFor(p.id).machines.length),
+    0,
+  );
+  const floorW = floorWidth(maxMachines);
   const floorD = workshopFloorDepth(projects.length);
   const { s: sceneScale, tx, ty } = sceneTransform(floorW, floorD);
 
@@ -205,8 +226,6 @@ export function Workshop({
     }
   }
 
-  const configFor = (projectId: string) =>
-    state.pipelines?.find((p) => p.projectId === projectId) ?? defaultPipeline(projectId);
   const labelFor = (projectId: string): string => {
     const project = projects.find((p) => p.id === projectId);
     return project ? project.name : projectId;
@@ -214,9 +233,10 @@ export function Workshop({
   const toggle = (next: Exclude<WorkshopSelection, null>): void =>
     setSelection((current) => (JSON.stringify(current) === JSON.stringify(next) ? null : next));
 
-  // A WS push can delete the selected project/item underneath the panel —
-  // render from a validated view of the selection so the panel just closes.
-  const selected = validateSelection(selection, state);
+  // A WS push can delete the selected project/item/machine underneath the
+  // panel — render from a validated view of the selection so the panel
+  // just closes (or clamps its insertion index).
+  const selected = validateSelection(selection, state, configFor);
 
   const nothingConfigured =
     projects.length === 0 &&
@@ -236,16 +256,21 @@ export function Workshop({
         laneIndex={laneIndex}
         config={configFor(project.id)}
         items={workItems.filter((item) => item.projectId === project.id)}
+        beltX1={floorW}
         triggerActivity={activityByProject.get(project.id) ?? []}
-        selectedStage={
-          selected?.kind === 'stage' && selected.projectId === project.id ? selected.stage : null
+        selectedMachineKey={
+          selected?.kind === 'machine' && selected.projectId === project.id
+            ? selected.machineKey
+            : null
         }
         selectedItemId={selected?.kind === 'item' ? selected.itemId : null}
         removing={deleteMutation.isPending && String(deleteMutation.variables ?? '') === project.id}
-        onSelectStage={(stage) => toggle({ kind: 'stage', projectId: project.id, stage })}
+        onSelectMachine={(machineKey) => toggle({ kind: 'machine', projectId: project.id, machineKey })}
         onSelectItem={(itemId) => toggle({ kind: 'item', itemId })}
         onOpenIntake={() => toggle({ kind: 'intake', projectId: project.id })}
-        onOpenAddStage={() => toggle({ kind: 'addStage', projectId: project.id })}
+        onOpenAddMachine={(insertIndex) =>
+          toggle({ kind: 'addMachine', projectId: project.id, insertIndex })
+        }
         onOpenSettings={() => toggle({ kind: 'projectSettings', projectId: project.id })}
         onRemove={() => deleteMutation.mutate(project.id)}
       />
@@ -255,7 +280,11 @@ export function Workshop({
     key: 'ghost-lane',
     anchor: { x: HEAD_X, y: ghostLaneY(projects.length) },
     node: (
-      <GhostLane y0={ghostLaneY(projects.length)} onActivate={() => toggle({ kind: 'newProject' })} />
+      <GhostLane
+        y0={ghostLaneY(projects.length)}
+        beltX1={floorW}
+        onActivate={() => toggle({ kind: 'newProject' })}
+      />
     ),
   });
   entities.push({
@@ -354,27 +383,43 @@ export function Workshop({
       </g>
 
       {/* Screen-space panels, outside the scale wrapper. */}
-      {selected?.kind === 'stage' ? (
-        <StationConfigPanel
-          key={`${selected.projectId}:${selected.stage}`}
+      {selected?.kind === 'machine' && selected.machine ? (
+        <MachineConfigPanel
+          key={`${selected.projectId}:${selected.machineKey}`}
           projectLabel={labelFor(selected.projectId)}
-          stage={selected.stage}
-          config={configFor(selected.projectId).stages[selected.stage]}
+          machine={selected.machine}
+          templateBlurb={
+            machineTemplates.find((t) => t.id === selected.machine.templateId)?.description
+          }
           toolbox={toolbox}
+          vault={vault}
           isPending={saveMutation.isPending}
           error={saveMutation.error}
           onSave={(next) =>
             saveMutation.mutate({
               projectId: selected.projectId,
-              stages: { ...configFor(selected.projectId).stages, [selected.stage]: next },
+              machines: configFor(selected.projectId).machines.map((m) =>
+                m.key === next.key ? next : m,
+              ),
             })
           }
+          onRemove={() => {
+            saveMutation.mutate({
+              projectId: selected.projectId,
+              machines: configFor(selected.projectId).machines.filter(
+                (m) => m.key !== selected.machineKey,
+              ),
+            });
+            setSelection(null);
+          }}
+          onCreateVaultKey={(key) => vaultMutation.mutate({ type: 'create-key', key })}
           onClose={() => setSelection(null)}
         />
       ) : null}
       {selected?.kind === 'item' && selected.item ? (
         <WorkItemPanel
           item={selected.item}
+          machines={configFor(selected.item.projectId).machines}
           isPending={actionMutation.isPending}
           error={actionMutation.error}
           onApprove={() => actionMutation.mutate({ id: selected.item.id, action: 'approve' })}
@@ -387,9 +432,7 @@ export function Workshop({
         <RequestIntakeForm
           key={selected.projectId}
           projectLabel={labelFor(selected.projectId)}
-          noMachines={PIPELINE_STAGE_ORDER.every(
-            (stage) => !configFor(selected.projectId).stages[stage].enabled,
-          )}
+          noMachines={configFor(selected.projectId).machines.length === 0}
           isPending={createMutation.isPending}
           error={createMutation.error}
           onSubmit={(body) => createMutation.mutate({ projectId: selected.projectId, body })}
@@ -415,19 +458,35 @@ export function Workshop({
           onClose={() => setSelection(null)}
         />
       ) : null}
-      {selected?.kind === 'addStage' ? (
-        <AddStagePanel
+      {selected?.kind === 'addMachine' ? (
+        <AddMachinePanel
+          key={`${selected.projectId}:${selected.insertIndex}`}
           projectLabel={labelFor(selected.projectId)}
-          config={configFor(selected.projectId)}
-          isPending={saveMutation.isPending}
-          error={saveMutation.error}
-          onInstall={(stage) => {
-            const stages = configFor(selected.projectId).stages;
-            saveMutation.mutate({
-              projectId: selected.projectId,
-              stages: { ...stages, [stage]: { ...stages[stage], enabled: true } },
-            });
+          insertIndex={selected.insertIndex}
+          machineCount={configFor(selected.projectId).machines.length}
+          existingKeys={configFor(selected.projectId).machines.map((m) => m.key)}
+          templates={machineTemplates}
+          toolbox={toolbox}
+          vault={vault}
+          isPending={saveMutation.isPending || templateMutation.isPending}
+          error={saveMutation.error ?? templateMutation.error}
+          onInstall={(machine, saveAsTemplate) => {
+            const machines = configFor(selected.projectId).machines;
+            saveMutation.mutate(
+              {
+                projectId: selected.projectId,
+                machines: [
+                  ...machines.slice(0, selected.insertIndex),
+                  machine,
+                  ...machines.slice(selected.insertIndex),
+                ],
+              },
+              { onSuccess: () => setSelection(null) },
+            );
+            if (saveAsTemplate) templateMutation.mutate({ type: 'create', body: saveAsTemplate });
           }}
+          onDeleteTemplate={(id) => templateMutation.mutate({ type: 'delete', id })}
+          onCreateVaultKey={(key) => vaultMutation.mutate({ type: 'create-key', key })}
           onClose={() => setSelection(null)}
         />
       ) : null}
@@ -491,18 +550,26 @@ type RepoAction =
   | { type: 'retry'; projectId: string; repoId: string }
   | { type: 'delete'; projectId: string; repoId: string };
 
+type TemplateAction =
+  | { type: 'create'; body: MachineTemplateBody }
+  | { type: 'delete'; id: string };
+
 type ValidatedSelection =
-  | { kind: 'stage'; projectId: string; stage: PipelineStageId }
+  | { kind: 'machine'; projectId: string; machineKey: string; machine: PipelineMachine }
   | { kind: 'item'; itemId: string; item: NonNullable<UIState['workItems']>[number] }
   | { kind: 'intake'; projectId: string }
-  | { kind: 'addStage'; projectId: string }
+  | { kind: 'addMachine'; projectId: string; insertIndex: number }
   | { kind: 'toolbox' }
   | { kind: 'vault' }
   | { kind: 'newProject' }
   | { kind: 'projectSettings'; projectId: string; project: UIState['projects'][number] }
   | null;
 
-function validateSelection(selection: WorkshopSelection, state: UIState): ValidatedSelection {
+function validateSelection(
+  selection: WorkshopSelection,
+  state: UIState,
+  configFor: (projectId: string) => { machines: PipelineMachine[] },
+): ValidatedSelection {
   if (!selection) return null;
   if (
     selection.kind === 'toolbox' ||
@@ -519,7 +586,18 @@ function validateSelection(selection: WorkshopSelection, state: UIState): Valida
     const project = state.projects.find((p) => p.id === selection.projectId);
     return project ? { ...selection, project } : null;
   }
-  return state.projects.some((p) => p.id === selection.projectId) ? selection : null;
+  if (!state.projects.some((p) => p.id === selection.projectId)) return null;
+  if (selection.kind === 'machine') {
+    const machine = configFor(selection.projectId).machines.find(
+      (m) => m.key === selection.machineKey,
+    );
+    return machine ? { ...selection, machine } : null;
+  }
+  if (selection.kind === 'addMachine') {
+    const count = configFor(selection.projectId).machines.length;
+    return { ...selection, insertIndex: Math.min(selection.insertIndex, count) };
+  }
+  return selection;
 }
 
 /** Floor rhombus + faint tile grid, sized to the current room. */

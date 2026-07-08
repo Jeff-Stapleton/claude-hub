@@ -25,6 +25,7 @@ export class HubPaths {
       | 'pipelines'
       | 'workItems'
       | 'toolbox'
+      | 'machineTemplates'
       | 'gitCredentials'
       | 'vault',
   ): string {

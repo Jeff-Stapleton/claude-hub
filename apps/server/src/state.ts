@@ -4,13 +4,14 @@ import type { ChannelManager } from '@claude-hub/channels';
 import type {
   AgentProviderId,
   AppConfig,
+  MachineTemplate,
   PipelineConfig,
   Project,
   Store,
   StoreSnapshot,
   WorkItem,
 } from '@claude-hub/core';
-import { effectivePipelineConfig } from '@claude-hub/pipeline';
+import { effectivePipelineConfig, listMachineTemplates } from '@claude-hub/pipeline';
 import { redactCredential, type RedactedGitCredential } from './routes/git.js';
 import { redactToolbox, type RedactedToolbox } from './routes/toolbox.js';
 import { redactVault, type RedactedVaultEntry } from './vault.js';
@@ -34,6 +35,8 @@ export interface UIState {
   workItems: RedactedWorkItem[];
   /** Skills + MCP servers; MCP env/header values stripped to key names. */
   toolbox: RedactedToolbox;
+  /** Machine templates: built-ins + saved customs, one install-ready list. */
+  machineTemplates: MachineTemplate[];
   /** Git credentials with tokens stripped; repos reference these by id. */
   gitCredentials: RedactedGitCredential[];
   /** Vault keys with values stripped to set/unset; requiredBy is derived. */
@@ -133,7 +136,8 @@ export async function buildUIState(
     pipelines,
     workItems,
     toolbox: redactToolbox(snapshot.toolbox),
+    machineTemplates: listMachineTemplates(store),
     gitCredentials: snapshot.gitCredentials.map(redactCredential),
-    vault: redactVault(snapshot.vault, snapshot.toolbox),
+    vault: redactVault(snapshot.vault, snapshot.toolbox, snapshot.machineTemplates),
   };
 }

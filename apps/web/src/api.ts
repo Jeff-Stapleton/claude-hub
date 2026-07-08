@@ -1,6 +1,7 @@
 import type {
   AppConfig,
   CronTrigger,
+  MachineTemplate,
   McpTransportInput,
   PipelineConfig,
   Project,
@@ -36,6 +37,12 @@ export interface UpdateProjectBody {
   skills?: string[];
   mcpServers?: string[];
 }
+
+/** Create/update payload for a custom machine template. */
+export type MachineTemplateBody = Omit<
+  MachineTemplate,
+  'id' | 'source' | 'createdAt' | 'updatedAt'
+>;
 
 export interface PathInspection {
   exists: boolean;
@@ -189,10 +196,24 @@ export const api = {
   listRuns: (id: string) =>
     req<TriggerRunRecord[]>(`/api/triggers/${encodeURIComponent(id)}/runs`),
   listActivity: () => req<ActivityEntry[]>('/api/activity'),
-  savePipeline: (projectId: string, body: Pick<PipelineConfig, 'stages'>) =>
+  savePipeline: (projectId: string, body: Pick<PipelineConfig, 'machines'>) =>
     req<PipelineConfig>(`/api/projects/${encodeURIComponent(projectId)}/pipeline`, {
       method: 'PUT',
       body: JSON.stringify(body),
+    }),
+  createMachineTemplate: (body: MachineTemplateBody) =>
+    req<MachineTemplate>('/api/machine-templates', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    }),
+  updateMachineTemplate: (id: string, body: MachineTemplateBody) =>
+    req<MachineTemplate>(`/api/machine-templates/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  deleteMachineTemplate: (id: string) =>
+    req<{ ok: true }>(`/api/machine-templates/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
     }),
   createWorkItem: (projectId: string, body: { request: string; title?: string }) =>
     req<WorkItem>(`/api/projects/${encodeURIComponent(projectId)}/work-items`, {

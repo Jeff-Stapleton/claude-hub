@@ -2,7 +2,9 @@ import type { AgentRunner, RunProjectSessionResult } from '@claude-hub/agent-run
 import {
   HubPaths,
   Store,
+  type BuiltinMachineSlug,
   type PipelineConfig,
+  type PipelineMachine,
   type Project,
   type WorkItem,
 } from '@claude-hub/core';
@@ -10,7 +12,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { defaultPipelineConfig } from '../src/defaults.js';
+import { BUILTIN_MACHINE_TEMPLATES } from '../src/defaults.js';
 import { readArchivedWorkItems, readWorkItemStageRuns } from '../src/history.js';
 import { PipelineRunner, WorkItemStateError } from '../src/runner.js';
 import { resolveTransportSecrets } from '../src/stages.js';
@@ -51,21 +53,41 @@ async function until<T>(fn: () => T | undefined | false, timeoutMs = 5000): Prom
   }
 }
 
+/** A machine instance stamped from a built-in template, capabilities materialized. */
+function builtinMachine(
+  slug: BuiltinMachineSlug,
+  overrides: Partial<PipelineMachine> = {},
+): PipelineMachine {
+  const t = BUILTIN_MACHINE_TEMPLATES.find((tt) => tt.slug === slug)!;
+  return {
+    key: slug,
+    name: t.name,
+    templateId: t.id,
+    gate: 'auto',
+    ...(t.resultCheck !== undefined ? { resultCheck: t.resultCheck } : {}),
+    ...(t.monitor !== undefined ? { monitor: { ...t.monitor } } : {}),
+    ...overrides,
+  };
+}
+
+function linePipeline(machines: PipelineMachine[], projectId = project.id): PipelineConfig {
+  return { projectId, machines, updatedAt: new Date().toISOString() };
+}
+
 /**
- * Config with the four agent stages installed, no approval gates, and
- * monitor disabled: runs straight through. (Defaults ship all-disabled —
- * a blank line — so tests must install the machines they exercise.)
+ * A line with the four agent machines, no approval gates, no monitor:
+ * runs straight through. (A project with no stored config has a blank
+ * line — tests must install the machines they exercise.)
  */
-function openPipeline(overrides?: (config: PipelineConfig) => void): PipelineConfig {
-  const config = defaultPipelineConfig(project.id);
-  config.stages.spec.enabled = true;
-  config.stages.code.enabled = true;
-  config.stages.test.enabled = true;
-  config.stages.deploy.enabled = true;
-  config.stages.deploy.gate = 'auto';
-  config.stages.monitor.enabled = false;
-  overrides?.(config);
-  return config;
+function openPipeline(mutate?: (machines: PipelineMachine[]) => void): PipelineConfig {
+  const machines = [
+    builtinMachine('spec'),
+    builtinMachine('code'),
+    builtinMachine('test'),
+    builtinMachine('deploy'),
+  ];
+  mutate?.(machines);
+  return linePipeline(machines);
 }
 
 describe('PipelineRunner', () => {
@@ -88,7 +110,7 @@ describe('PipelineRunner', () => {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
-  it('runs an item through all stages to done when nothing gates', async () => {
+  it('runs an item through every machine to done when nothing gates', async () => {
     await store.update('pipelines', [openPipeline()]);
     mockRun.mockResolvedValue(okResult());
 
@@ -100,19 +122,18 @@ describe('PipelineRunner', () => {
     expect(archived).toHaveLength(1);
     expect(archived[0]?.id).toBe(item.id);
     expect(archived[0]?.status).toBe('done');
-    expect(archived[0]?.stages.intake.status).toBe('skipped'); // disabled by default
-    expect(archived[0]?.stages.spec.status).toBe('success');
-    expect(archived[0]?.stages.code.status).toBe('success');
-    expect(archived[0]?.stages.test.status).toBe('success');
-    expect(archived[0]?.stages.deploy.status).toBe('success');
-    // 4 enabled agent stages ran.
+    // Only installed machines get result entries — no phantom slots.
+    expect(archived[0]?.stages.intake).toBeUndefined();
+    expect(archived[0]?.stages.spec?.status).toBe('success');
+    expect(archived[0]?.stages.code?.status).toBe('success');
+    expect(archived[0]?.stages.test?.status).toBe('success');
+    expect(archived[0]?.stages.deploy?.status).toBe('success');
     expect(mockRun).toHaveBeenCalledTimes(4);
   });
 
-  it('holds at the default deploy approval gate, then advances on approve', async () => {
-    // Installed stages keep deploy's default approval gate.
-    const config = openPipeline((c) => {
-      c.stages.deploy.gate = 'approval';
+  it('holds at an approval gate, then advances on approve', async () => {
+    const config = openPipeline((machines) => {
+      machines[3]!.gate = 'approval'; // deploy
     });
     await store.update('pipelines', [config]);
     mockRun.mockResolvedValue(okResult());
@@ -123,7 +144,7 @@ describe('PipelineRunner', () => {
       store.workItems().find((it) => it.id === item.id && it.status === 'waiting-approval'),
     );
     expect(held.currentStage).toBe('deploy');
-    expect(held.stages.deploy.status).toBe('waiting-approval');
+    expect(held.stages.deploy?.status).toBe('waiting-approval');
 
     await runner.approve(item.id);
     await until(() => store.workItems().length === 0);
@@ -132,8 +153,8 @@ describe('PipelineRunner', () => {
     expect(archived[0]?.approvedStages).toEqual(['deploy']);
   });
 
-  it('rejects enqueue when the line has no enabled stages (blank default)', async () => {
-    // No stored config: the all-disabled defaults apply.
+  it('rejects enqueue when the line has no machines (blank default)', async () => {
+    // No stored config: the blank-line default applies.
     await expect(
       runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' }),
     ).rejects.toMatchObject({ name: 'WorkItemStateError', code: 'no-enabled-stages' });
@@ -148,7 +169,7 @@ describe('PipelineRunner', () => {
     await expect(runner.approve(item.id)).rejects.toThrow(WorkItemStateError);
   });
 
-  it('marks the item failed when a stage errors, and retry re-runs it', async () => {
+  it('marks the item failed when a machine errors, and retry re-runs it', async () => {
     await store.update('pipelines', [openPipeline()]);
     mockRun
       .mockResolvedValueOnce(okResult('plan'))
@@ -160,8 +181,8 @@ describe('PipelineRunner', () => {
       store.workItems().find((it) => it.id === item.id && it.status === 'failed'),
     );
     expect(failed.currentStage).toBe('code');
-    expect(failed.stages.code.status).toBe('failed');
-    expect(failed.stages.code.error).toBe('boom');
+    expect(failed.stages.code?.status).toBe('failed');
+    expect(failed.stages.code?.error).toBe('boom');
 
     mockRun.mockResolvedValue(okResult());
     await runner.retry(item.id);
@@ -170,7 +191,7 @@ describe('PipelineRunner', () => {
     expect(archived[0]?.status).toBe('done');
   });
 
-  it('fails the test stage when the agent reports TEST_RESULT: FAIL', async () => {
+  it('fails a lenient resultCheck machine on an explicit FAIL marker (legacy marker honored)', async () => {
     await store.update('pipelines', [openPipeline()]);
     mockRun.mockImplementation(async (opts) =>
       okResult(opts.prompt.includes('validation station') ? 'ran suite\nTEST_RESULT: FAIL flaky' : 'ok'),
@@ -181,7 +202,111 @@ describe('PipelineRunner', () => {
       store.workItems().find((it) => it.id === item.id && it.status === 'failed'),
     );
     expect(failed.currentStage).toBe('test');
-    expect(failed.stages.test.error).toMatch(/TEST_RESULT/);
+    expect(failed.stages.test?.error).toMatch(/MACHINE_RESULT/);
+  });
+
+  it('runs duplicate machines of the same template independently', async () => {
+    // A review-then-fix-then-review chain: two code machines.
+    const config = linePipeline([
+      builtinMachine('code'),
+      builtinMachine('code', { key: 'code-2', name: 'Code (round 2)' }),
+    ]);
+    await store.update('pipelines', [config]);
+    mockRun.mockResolvedValueOnce(okResult('first pass')).mockResolvedValueOnce(okResult('second pass'));
+
+    await runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    const archived = await readArchivedWorkItems(store.paths, project.id);
+    expect(archived[0]?.stages.code?.output).toBe('first pass');
+    expect(archived[0]?.stages['code-2']?.output).toBe('second pass');
+    expect(mockRun).toHaveBeenCalledTimes(2);
+  });
+
+  it('renders {{previous.output}} and {{stages.<key>.output}} against machine keys', async () => {
+    const config = linePipeline([
+      builtinMachine('spec', { promptTemplate: 'Plan for: {{request}}' }),
+      builtinMachine('code', {
+        key: 'implement',
+        promptTemplate: 'Prev: {{previous.output}} | Spec said: {{stages.spec.output}}',
+      }),
+    ]);
+    await store.update('pipelines', [config]);
+    mockRun.mockResolvedValueOnce(okResult('THE PLAN')).mockResolvedValue(okResult());
+
+    await runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    const secondPrompt = mockRun.mock.calls[1]![0].prompt;
+    expect(secondPrompt).toContain('Prev: THE PLAN');
+    expect(secondPrompt).toContain('Spec said: THE PLAN');
+  });
+
+  it('runs a commands-only machine without an agent run', async () => {
+    // Commands actually spawn a shell — the project cwd must exist.
+    await store.update('projects', [{ ...project, path: root }]);
+    const config = linePipeline([
+      {
+        key: 'checks',
+        name: 'Checks',
+        gate: 'auto',
+        commands: ['echo command-ran'],
+      },
+    ]);
+    await store.update('pipelines', [config]);
+
+    await runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    expect(mockRun).not.toHaveBeenCalled();
+    const archived = await readArchivedWorkItems(store.paths, project.id);
+    expect(archived[0]?.stages.checks?.status).toBe('success');
+    expect(archived[0]?.stages.checks?.output).toContain('command-ran');
+  });
+
+  it('fails a machine with no prompt template and no commands', async () => {
+    const config = linePipeline([{ key: 'blank', name: 'Blank', gate: 'auto' }]);
+    await store.update('pipelines', [config]);
+
+    const item = await runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' });
+    const failed = await until(() =>
+      store.workItems().find((it) => it.id === item.id && it.status === 'failed'),
+    );
+    expect(failed.stages.blank?.error).toMatch(/no prompt template and no commands/);
+    expect(mockRun).not.toHaveBeenCalled();
+  });
+
+  it('reconciles forward when the current machine was removed from the line', async () => {
+    await store.update('pipelines', [linePipeline([builtinMachine('spec'), builtinMachine('code')])]);
+    // Item parked on a machine that no longer exists; spec already succeeded.
+    const orphaned: WorkItem = {
+      id: 'wi-orphan',
+      projectId: project.id,
+      title: 'orphaned',
+      request: 'finish me',
+      source: 'manual',
+      status: 'queued',
+      currentStage: 'removed-machine',
+      stages: {
+        spec: { status: 'success', output: 'the plan' },
+        'removed-machine': { status: 'waiting-approval' },
+      },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await store.update('workItems', [orphaned]);
+    mockRun.mockResolvedValue(okResult());
+
+    await runner.recover();
+    await until(() => store.workItems().length === 0);
+
+    const archived = await readArchivedWorkItems(store.paths, project.id);
+    expect(archived[0]?.status).toBe('done');
+    // spec had already succeeded — only code ran.
+    expect(mockRun).toHaveBeenCalledTimes(1);
+    expect(archived[0]?.stages.code?.status).toBe('success');
+    // The orphaned result is retained for history.
+    expect(archived[0]?.stages['removed-machine']?.status).toBe('waiting-approval');
   });
 
   it('runs items FIFO within a project', async () => {
@@ -202,14 +327,14 @@ describe('PipelineRunner', () => {
     expect(archived).toHaveLength(2);
   });
 
-  it('resumes the same provider session across stages', async () => {
+  it('resumes the same provider session across machines', async () => {
     await store.update('pipelines', [openPipeline()]);
     mockRun.mockResolvedValue(okResult('ok', 'session-abc'));
 
     await runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' });
     await until(() => store.workItems().length === 0);
 
-    // First stage starts fresh; every later stage resumes the session.
+    // First machine starts fresh; every later machine resumes the session.
     expect(mockRun.mock.calls[0]?.[0]?.sessionId).toBeUndefined();
     for (const call of mockRun.mock.calls.slice(1)) {
       expect(call[0]?.sessionId).toBe('session-abc');
@@ -218,7 +343,7 @@ describe('PipelineRunner', () => {
 
   it('recover() re-queues items that were running and resumes them', async () => {
     await store.update('pipelines', [openPipeline()]);
-    // Simulate an item that died mid-code-stage in a previous process.
+    // Simulate an item that died mid-code-machine in a previous process.
     const stranded: WorkItem = {
       id: 'wi-stranded',
       projectId: project.id,
@@ -228,12 +353,10 @@ describe('PipelineRunner', () => {
       status: 'running',
       currentStage: 'code',
       stages: {
-        intake: { status: 'skipped' },
         spec: { status: 'success', output: 'the plan' },
         code: { status: 'running' },
         test: { status: 'pending' },
         deploy: { status: 'pending' },
-        monitor: { status: 'pending' },
       },
       sessions: { claude: 'session-old' },
       createdAt: new Date().toISOString(),
@@ -273,20 +396,22 @@ describe('PipelineRunner', () => {
   });
 
   it('fails the item when the project is missing', async () => {
-    const config = openPipeline();
-    config.projectId = 'nope';
+    const config = linePipeline(
+      [builtinMachine('spec'), builtinMachine('code')],
+      'nope',
+    );
     await store.update('pipelines', [config]);
     mockRun.mockResolvedValue(okResult());
     const item = await runner.enqueue({ projectId: 'nope', request: 'x', source: 'manual' });
     const failed = await until(() =>
       store.workItems().find((it) => it.id === item.id && it.status === 'failed'),
     );
-    expect(failed.stages.spec.error).toMatch(/not found/);
+    expect(failed.stages.spec?.error).toMatch(/not found/);
   });
 
-  it('parks the item in monitoring when the monitor stage is enabled', async () => {
-    const config = openPipeline((c) => {
-      c.stages.monitor.enabled = true;
+  it('parks the item in monitoring when a machine has a monitor loop', async () => {
+    const config = openPipeline((machines) => {
+      machines.push(builtinMachine('monitor'));
     });
     await store.update('pipelines', [config]);
     mockRun.mockResolvedValue(okResult());
@@ -295,7 +420,8 @@ describe('PipelineRunner', () => {
     const monitoring = await until(() =>
       store.workItems().find((it) => it.id === item.id && it.status === 'monitoring'),
     );
-    expect(monitoring.stages.monitor.checksPassed).toBe(0);
+    expect(monitoring.currentStage).toBe('monitor');
+    expect(monitoring.stages.monitor?.checksPassed).toBe(0);
   });
 });
 
@@ -319,14 +445,20 @@ describe('PipelineRunner.runMonitorCheck', () => {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
-  async function seedMonitoring(source: WorkItem['source'] = 'manual', maxChecks = 2): Promise<WorkItem> {
-    const config = defaultPipelineConfig(project.id);
-    // Monitor is installed (it's mid-check), spec so a filed defect has an
-    // agent stage to park on.
-    config.stages.spec.enabled = true;
-    config.stages.monitor.enabled = true;
-    config.stages.monitor.maxChecks = maxChecks;
-    await store.update('pipelines', [config]);
+  async function seedMonitoring(
+    source: WorkItem['source'] = 'manual',
+    maxChecks = 2,
+    machines?: PipelineMachine[],
+  ): Promise<WorkItem> {
+    // Monitor is installed (it's mid-check); spec so a filed defect has an
+    // agent machine to park on.
+    const line =
+      machines ??
+      [
+        builtinMachine('spec'),
+        builtinMachine('monitor', { monitor: { intervalMinutes: 30, maxChecks } }),
+      ];
+    await store.update('pipelines', [linePipeline(line)]);
     const item: WorkItem = {
       id: 'wi-mon',
       projectId: project.id,
@@ -336,11 +468,7 @@ describe('PipelineRunner.runMonitorCheck', () => {
       status: 'monitoring',
       currentStage: 'monitor',
       stages: {
-        intake: { status: 'skipped' },
         spec: { status: 'success' },
-        code: { status: 'success' },
-        test: { status: 'success' },
-        deploy: { status: 'success' },
         monitor: { status: 'running', checksPassed: 0 },
       },
       createdAt: new Date().toISOString(),
@@ -350,24 +478,68 @@ describe('PipelineRunner.runMonitorCheck', () => {
     return item;
   }
 
-  it('completes the item after maxChecks consecutive passes', async () => {
+  it('completes the item after maxChecks consecutive passes on the last machine', async () => {
     const item = await seedMonitoring('manual', 2);
-    mockRun.mockResolvedValue(okResult('all good\nMONITOR_RESULT: PASS'));
+    mockRun.mockResolvedValue(okResult('all good\nMACHINE_RESULT: PASS'));
 
     await runner.runMonitorCheck(item.id);
-    expect(store.workItems()[0]?.stages.monitor.checksPassed).toBe(1);
+    expect(store.workItems()[0]?.stages.monitor?.checksPassed).toBe(1);
 
     await runner.runMonitorCheck(item.id);
     expect(store.workItems()).toHaveLength(0);
     const archived = await readArchivedWorkItems(store.paths, project.id);
     expect(archived[0]?.status).toBe('done');
-    expect(archived[0]?.stages.monitor.status).toBe('success');
+    expect(archived[0]?.stages.monitor?.status).toBe('success');
+  });
+
+  it('accepts the legacy MONITOR_RESULT markers from migrated prompts', async () => {
+    const item = await seedMonitoring('manual', 1);
+    mockRun.mockResolvedValue(okResult('all good\nMONITOR_RESULT: PASS'));
+    await runner.runMonitorCheck(item.id);
+    const archived = await readArchivedWorkItems(store.paths, project.id);
+    expect(archived[0]?.status).toBe('done');
+  });
+
+  it('continues down the line after a mid-line monitor completes (soak test)', async () => {
+    const soak = builtinMachine('monitor', {
+      key: 'soak',
+      name: 'Soak',
+      monitor: { intervalMinutes: 30, maxChecks: 1 },
+    });
+    const item = await seedMonitoring('manual', 1, [
+      builtinMachine('spec'),
+      soak,
+      builtinMachine('deploy'),
+    ]);
+    await store.update('workItems', [
+      { ...item, currentStage: 'soak', stages: { spec: { status: 'success' }, soak: { status: 'running', checksPassed: 0 } } },
+    ]);
+    mockRun.mockResolvedValue(okResult('healthy\nMACHINE_RESULT: PASS'));
+
+    await runner.runMonitorCheck(item.id);
+    // The soak machine succeeded and the item continued through deploy.
+    await until(() => store.workItems().length === 0);
+    const archived = await readArchivedWorkItems(store.paths, project.id);
+    expect(archived[0]?.status).toBe('done');
+    expect(archived[0]?.stages.soak?.status).toBe('success');
+    expect(archived[0]?.stages.deploy?.status).toBe('success');
+  });
+
+  it('fails the item when the monitoring machine was removed from the line', async () => {
+    const item = await seedMonitoring();
+    await store.update('pipelines', [linePipeline([builtinMachine('spec')])]);
+
+    await runner.runMonitorCheck(item.id);
+    const failed = store.workItems().find((it) => it.id === item.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.stages.monitor?.error).toMatch(/removed from the line/);
+    expect(mockRun).not.toHaveBeenCalled();
   });
 
   it('fails the item and files a defect when a check fails', async () => {
     const item = await seedMonitoring('manual');
     mockRun
-      .mockResolvedValueOnce(okResult('something is wrong\nMONITOR_RESULT: FAIL errors in logs'))
+      .mockResolvedValueOnce(okResult('something is wrong\nMACHINE_RESULT: FAIL errors in logs'))
       // The filed defect starts draining in the background; park it on a
       // never-resolving run so it can't race the assertions or cleanup.
       .mockReturnValue(new Promise(() => {}));
@@ -382,7 +554,7 @@ describe('PipelineRunner.runMonitorCheck', () => {
     expect(defect?.title).toMatch(/^Defect:/);
   });
 
-  it('treats a missing PASS marker as a failure', async () => {
+  it('treats a missing PASS marker as a failure (strict resultCheck)', async () => {
     const item = await seedMonitoring();
     mockRun
       .mockResolvedValueOnce(okResult('looks fine to me'))
@@ -393,7 +565,7 @@ describe('PipelineRunner.runMonitorCheck', () => {
 
   it('does not file a defect for monitor-sourced items (loop guard)', async () => {
     const item = await seedMonitoring('monitor');
-    mockRun.mockResolvedValue(okResult('MONITOR_RESULT: FAIL still broken'));
+    mockRun.mockResolvedValue(okResult('MACHINE_RESULT: FAIL still broken'));
     await runner.runMonitorCheck(item.id);
     expect(store.workItems().find((it) => it.id === item.id)?.status).toBe('failed');
     expect(store.workItems().filter((it) => it.id !== item.id)).toHaveLength(0);
@@ -418,7 +590,7 @@ describe('toolbox assignment resolution', () => {
     await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
   });
 
-  it('passes resolved tools per stage and drops dangling ids', async () => {
+  it('passes resolved tools per machine and drops dangling ids', async () => {
     const now = new Date().toISOString();
     await store.update('toolbox', {
       skills: [
@@ -445,9 +617,9 @@ describe('toolbox assignment resolution', () => {
       ],
     });
     await store.update('pipelines', [
-      openPipeline((c) => {
-        c.stages.spec.skills = ['skill-1', 'deleted-skill'];
-        c.stages.spec.mcpServers = ['mcp-1'];
+      openPipeline((machines) => {
+        machines[0]!.skills = ['skill-1', 'deleted-skill'];
+        machines[0]!.mcpServers = ['mcp-1'];
       }),
     ]);
     mockRun.mockResolvedValue(okResult());
@@ -461,12 +633,12 @@ describe('toolbox assignment resolution', () => {
       skills: [{ name: 'my-skill', description: 'Does things', body: '# Body' }],
       mcpServers: [{ name: 'aws-tools', transport: { type: 'stdio', command: 'npx' } }],
     });
-    // Unassigned stages still get an (empty) payload — deny by default.
+    // Unassigned machines still get an (empty) payload — deny by default.
     const codeCall = mockRun.mock.calls[1]![0];
     expect(codeCall.tools).toEqual({ skills: [], mcpServers: [] });
   });
 
-  it('unions project-level assignments with stage assignments (deduped)', async () => {
+  it('unions project-level assignments with machine assignments (deduped)', async () => {
     const now = new Date().toISOString();
     await store.update('toolbox', {
       skills: [
@@ -510,8 +682,8 @@ describe('toolbox assignment resolution', () => {
       },
     ]);
     await store.update('pipelines', [
-      openPipeline((c) => {
-        c.stages.spec.skills = ['skill-stage'];
+      openPipeline((machines) => {
+        machines[0]!.skills = ['skill-stage'];
       }),
     ]);
     mockRun.mockResolvedValue(okResult());
@@ -526,7 +698,7 @@ describe('toolbox assignment resolution', () => {
     ]);
     expect(specCall.tools?.skills).toHaveLength(2); // deduped, not doubled
     expect(specCall.tools?.mcpServers.map((m) => m.name)).toEqual(['project-server']);
-    // A stage with no assignments of its own still inherits project tools.
+    // A machine with no assignments of its own still inherits project tools.
     const codeCall = mockRun.mock.calls[1]![0];
     expect(codeCall.tools?.skills.map((s) => s.name)).toEqual(['project-skill', 'stage-skill']);
     expect(codeCall.tools?.mcpServers.map((m) => m.name)).toEqual(['project-server']);
@@ -567,8 +739,8 @@ describe('toolbox assignment resolution', () => {
       mcpServers: [],
     });
     await store.update('pipelines', [
-      openPipeline((c) => {
-        c.stages.spec.skills = ['skill-1'];
+      openPipeline((machines) => {
+        machines[0]!.skills = ['skill-1'];
       }),
     ]);
     mockRun.mockResolvedValue(okResult());
@@ -580,7 +752,28 @@ describe('toolbox assignment resolution', () => {
     // Set + required key injected; unset key skipped (run proceeds anyway);
     // an unassigned tool's key never leaks into the run.
     expect(specCall.tools?.env).toEqual({ GITHUB_TOKEN: 'gh-secret' });
-    // Stages with no assigned tools get no env at all.
+    // Machines with no assigned tools get no env at all.
+    const codeCall = mockRun.mock.calls[1]![0];
+    expect(codeCall.tools?.env).toBeUndefined();
+  });
+
+  it("injects the machine's own requiredEnv variables into the run env", async () => {
+    const now = new Date().toISOString();
+    await store.update('vault', [
+      { key: 'TARGET_ENV', value: 'staging', createdAt: now, updatedAt: now },
+    ]);
+    await store.update('pipelines', [
+      openPipeline((machines) => {
+        machines[0]!.requiredEnv = ['TARGET_ENV'];
+      }),
+    ]);
+    mockRun.mockResolvedValue(okResult());
+
+    await runner.enqueue({ projectId: project.id, request: 'var run', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    const specCall = mockRun.mock.calls[0]![0];
+    expect(specCall.tools?.env).toEqual({ TARGET_ENV: 'staging' });
     const codeCall = mockRun.mock.calls[1]![0];
     expect(codeCall.tools?.env).toBeUndefined();
   });
@@ -620,8 +813,8 @@ describe('toolbox assignment resolution', () => {
       ],
     });
     await store.update('pipelines', [
-      openPipeline((c) => {
-        c.stages.spec.mcpServers = ['mcp-stdio', 'mcp-http'];
+      openPipeline((machines) => {
+        machines[0]!.mcpServers = ['mcp-stdio', 'mcp-http'];
       }),
     ]);
     mockRun.mockResolvedValue(okResult());
@@ -643,7 +836,7 @@ describe('toolbox assignment resolution', () => {
     });
   });
 
-  it('prepends the project vision/context preamble to every stage prompt', async () => {
+  it('prepends the project vision/context preamble to every machine prompt', async () => {
     await store.update('projects', [
       { ...project, vision: 'Build the best widget.', context: 'Use pnpm.' },
     ]);

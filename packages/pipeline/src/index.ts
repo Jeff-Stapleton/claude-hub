@@ -1,12 +1,15 @@
 export {
+  BUILTIN_MACHINE_TEMPLATES,
   DEFAULT_MONITOR_INTERVAL_MINUTES,
   DEFAULT_MONITOR_MAX_CHECKS,
-  DEFAULT_STAGE_TEMPLATES,
-  MONITOR_FAIL_MARKER,
-  MONITOR_PASS_MARKER,
-  TEST_FAIL_MARKER,
+  LEGACY_FAIL_MARKERS,
+  LEGACY_PASS_MARKERS,
+  MACHINE_FAIL_MARKER,
+  MACHINE_PASS_MARKER,
   defaultPipelineConfig,
   effectivePipelineConfig,
+  findMachineTemplate,
+  listMachineTemplates,
 } from './defaults.js';
 export { runCommands, type RunCommandsResult } from './commands.js';
 export {
@@ -18,7 +21,7 @@ export {
 } from './history.js';
 export {
   STAGE_OUTPUT_LIMIT,
-  executeStage,
+  executeMachine,
   truncateOutput,
   type ExecuteStageDeps,
   type ExecuteStageResult,

@@ -1,7 +1,6 @@
 import type { AgentRunner } from '@claude-hub/agent-runner';
 import {
-  PIPELINE_STAGE_ORDER,
-  type PipelineStageId,
+  type PipelineMachine,
   type StageResult,
   type Store,
   type WorkItem,
@@ -14,7 +13,7 @@ import {
   effectivePipelineConfig,
 } from './defaults.js';
 import { appendStageRun, archiveWorkItem } from './history.js';
-import { executeStage, truncateOutput } from './stages.js';
+import { executeMachine, truncateOutput } from './stages.js';
 
 export interface EnqueueWorkItemInput {
   projectId: string;
@@ -27,8 +26,8 @@ export interface EnqueueWorkItemInput {
 export interface PipelineRunnerEvents {
   /** Fired on every persisted work item state change. */
   itemChanged: (item: WorkItem) => void;
-  stageStarted: (item: WorkItem, stage: PipelineStageId) => void;
-  stageFinished: (item: WorkItem, stage: PipelineStageId, ok: boolean) => void;
+  stageStarted: (item: WorkItem, machineKey: string) => void;
+  stageFinished: (item: WorkItem, machineKey: string, ok: boolean) => void;
 }
 
 /** Thrown for invalid work item operations; routes map codes to 404/409. */
@@ -45,10 +44,21 @@ export class WorkItemStateError extends Error {
 const TITLE_LIMIT = 60;
 
 /**
- * Drives work items through the fixed assembly-line stages. One item runs
+ * Drives work items through a project's ordered machine line. One item runs
  * per project at a time (FIFO); different projects advance in parallel.
  * Items parked at approval gates or in monitoring release their queue slot
  * so a held item never blocks the line.
+ *
+ * Line edits under an in-flight item reconcile forward-only:
+ *   1. While the item's currentStage key still exists, machines inserted
+ *      BEFORE it never run for that item; machines inserted after are
+ *      picked up naturally as the loop walks the current array.
+ *   2. If the currentStage key no longer exists (machine removed), the item
+ *      resumes at the first machine in current line order without a
+ *      recorded 'success' — if every installed machine has succeeded, the
+ *      item completes.
+ *   3. Results recorded under keys no longer installed are retained on the
+ *      item and in archives, so history stays truthful.
  *
  * Every state transition goes through `Store.update('workItems', …)`, which
  * the server already fans out to the UI over the WS fat-patch.
@@ -66,20 +76,22 @@ export class PipelineRunner extends EventEmitter {
   }
 
   async enqueue(input: EnqueueWorkItemInput): Promise<WorkItem> {
-    // A blank line (no machines installed) would run every stage as skipped
-    // and archive the item as done having done nothing — reject instead so
-    // webhook/cron/channel intakes fail visibly.
+    // A blank line (no machines installed) would archive the item as done
+    // having done nothing — reject instead so webhook/cron/channel intakes
+    // fail visibly. Error code kept as 'no-enabled-stages' for API
+    // stability with pre-v7 callers.
     const config = effectivePipelineConfig(this.store, input.projectId);
-    if (PIPELINE_STAGE_ORDER.every((stage) => !config.stages[stage].enabled)) {
+    const first = config.machines[0];
+    if (!first) {
       throw new WorkItemStateError(
-        `project ${input.projectId} has no enabled pipeline stages; add a machine to its assembly line first`,
+        `project ${input.projectId} has no machines on its line; add a machine to its assembly line first`,
         'no-enabled-stages',
       );
     }
 
     const now = new Date().toISOString();
-    const stages = {} as Record<PipelineStageId, StageResult>;
-    for (const stage of PIPELINE_STAGE_ORDER) stages[stage] = { status: 'pending' };
+    const stages: Record<string, StageResult> = {};
+    for (const machine of config.machines) stages[machine.key] = { status: 'pending' };
 
     const item: WorkItem = {
       id: randomUUID(),
@@ -89,7 +101,7 @@ export class PipelineRunner extends EventEmitter {
       source: input.source,
       ...(input.sourceRef !== undefined ? { sourceRef: input.sourceRef } : {}),
       status: 'queued',
-      currentStage: PIPELINE_STAGE_ORDER[0]!,
+      currentStage: first.key,
       stages,
       createdAt: now,
       updatedAt: now,
@@ -186,34 +198,94 @@ export class PipelineRunner extends EventEmitter {
   }
 
   /**
+   * Called after a project's line is edited. Items parked at an approval
+   * gate whose machine was removed can never be approved (the key is gone),
+   * so they're re-queued and the drain loop re-reconciles them; the
+   * unconditional kick is a no-op when nothing is queued.
+   */
+  async reconcileLineEdit(projectId: string): Promise<void> {
+    const keys = new Set(
+      effectivePipelineConfig(this.store, projectId).machines.map((m) => m.key),
+    );
+    const stuck = this.store
+      .workItems()
+      .filter(
+        (it) =>
+          it.projectId === projectId &&
+          it.status === 'waiting-approval' &&
+          !keys.has(it.currentStage),
+      );
+    for (const it of stuck) {
+      await this.updateItem(it.id, (x) => {
+        x.status = 'queued';
+      });
+      console.log(
+        `[pipeline] "${it.title}" (${it.id.slice(0, 8)}) was held at removed machine ${it.currentStage}; re-queued`,
+      );
+    }
+    this.kick(projectId);
+  }
+
+  /**
    * One monitor check for a `monitoring` item. Called by MonitorScheduler
    * on its interval. A pass increments the counter; enough consecutive
-   * passes complete the item. A failure fails the item and auto-files a
-   * defect work item at the top of the line (unless this item is itself a
-   * monitor-filed defect — that would loop).
+   * passes complete the machine — the item ships if it's the last machine
+   * on the line, or re-queues to continue down the line otherwise (a mid-
+   * line soak test). A failure fails the item and auto-files a defect work
+   * item at the top of the line (unless this item is itself a monitor-filed
+   * defect — that would loop).
    */
   async runMonitorCheck(id: string): Promise<void> {
     const item = this.store.workItems().find((it) => it.id === id);
     if (!item || item.status !== 'monitoring') return;
 
+    const machines = effectivePipelineConfig(this.store, item.projectId).machines;
+    const idx = machines.findIndex((m) => m.key === item.currentStage);
+    const machine = idx >= 0 ? machines[idx]! : undefined;
+    const machineKey = item.currentStage;
+
+    if (!machine) {
+      // The monitoring machine was removed from the line. Fail visibly —
+      // retry after reconfiguring re-reconciles via the advance loop.
+      await this.updateItem(id, (it) => {
+        it.stages[machineKey] = {
+          ...(it.stages[machineKey] ?? {}),
+          status: 'failed',
+          error: `monitor machine "${machineKey}" was removed from the line`,
+          finishedAt: new Date().toISOString(),
+        };
+        it.status = 'failed';
+      });
+      return;
+    }
+    if (!machine.monitor) {
+      // The machine lost its monitor loop mid-watch: hand it back to the
+      // advance loop, which re-runs it as a normal machine.
+      const requeued = await this.updateItem(id, (it) => {
+        it.status = 'queued';
+        it.stages[machineKey] = { status: 'pending' };
+      });
+      if (requeued) this.kick(requeued.projectId);
+      return;
+    }
+
     const project = this.store.projects().find((p) => p.id === item.projectId);
-    const cfg = effectivePipelineConfig(this.store, item.projectId).stages.monitor;
     const startedAt = new Date().toISOString();
 
     let ok = false;
     let output = '';
     let error: string | undefined;
     let prompt: string | undefined;
-    let session: Awaited<ReturnType<typeof executeStage>>['session'];
+    let session: Awaited<ReturnType<typeof executeMachine>>['session'];
 
     if (!project) {
       error = `project ${item.projectId} not found`;
     } else {
-      const res = await executeStage(
+      const res = await executeMachine(
         { store: this.store, agentRunner: this.agentRunner, ...(this.opts.timeoutMs ? { defaultTimeoutMs: this.opts.timeoutMs } : {}) },
         item,
-        'monitor',
-        cfg,
+        machine,
+        machines,
         project,
       );
       ok = res.ok;
@@ -225,7 +297,7 @@ export class PipelineRunner extends EventEmitter {
 
     await appendStageRun(this.store.paths, {
       workItemId: item.id,
-      stage: 'monitor',
+      stage: machineKey,
       status: ok ? 'success' : 'failed',
       startedAt,
       finishedAt: new Date().toISOString(),
@@ -235,29 +307,41 @@ export class PipelineRunner extends EventEmitter {
     });
 
     if (ok) {
-      const passed = (item.stages.monitor.checksPassed ?? 0) + 1;
-      const maxChecks = cfg.maxChecks ?? DEFAULT_MONITOR_MAX_CHECKS;
+      const passed = (item.stages[machineKey]?.checksPassed ?? 0) + 1;
+      const maxChecks = machine.monitor.maxChecks ?? DEFAULT_MONITOR_MAX_CHECKS;
       if (passed >= maxChecks) {
-        const done = await this.updateItem(id, (it) => {
-          it.stages.monitor = {
+        const isLast = idx === machines.length - 1;
+        const completed = await this.updateItem(id, (it) => {
+          it.stages[machineKey] = {
             status: 'success',
             checksPassed: passed,
             output: truncateOutput(output),
             finishedAt: new Date().toISOString(),
           };
-          it.status = 'done';
-          it.finishedAt = new Date().toISOString();
           if (session) it.sessions = { ...it.sessions, [session.provider]: session.sessionId };
+          if (isLast) {
+            it.status = 'done';
+            it.finishedAt = new Date().toISOString();
+          } else {
+            it.status = 'queued';
+            it.currentStage = machines[idx + 1]!.key;
+          }
         });
-        if (done) {
-          await archiveWorkItem(this.store.paths, done);
+        if (completed && isLast) {
+          await archiveWorkItem(this.store.paths, completed);
           await this.store.update('workItems', (items) => items.filter((it) => it.id !== id));
-          console.log(`[pipeline] "${done.title}" (${id.slice(0, 8)}) shipped after ${passed} healthy checks`);
+          console.log(`[pipeline] "${completed.title}" (${id.slice(0, 8)}) shipped after ${passed} healthy checks`);
+        } else if (completed) {
+          console.log(
+            `[pipeline] "${completed.title}" (${id.slice(0, 8)}) passed ${passed} checks at ${machineKey}; continuing down the line`,
+          );
+          this.kick(completed.projectId);
         }
       } else {
         await this.updateItem(id, (it) => {
-          it.stages.monitor = {
-            ...it.stages.monitor,
+          it.stages[machineKey] = {
+            ...it.stages[machineKey],
+            status: it.stages[machineKey]?.status ?? 'running',
             checksPassed: passed,
             output: truncateOutput(output),
           };
@@ -269,8 +353,8 @@ export class PipelineRunner extends EventEmitter {
     }
 
     const failed = await this.updateItem(id, (it) => {
-      it.stages.monitor = {
-        ...it.stages.monitor,
+      it.stages[machineKey] = {
+        ...it.stages[machineKey],
         status: 'failed',
         output: truncateOutput(output),
         ...(error !== undefined ? { error } : {}),
@@ -321,80 +405,85 @@ export class PipelineRunner extends EventEmitter {
 
   /**
    * Runs one work item forward until it parks: a gate, a failure,
-   * monitoring, or completion. `startItem.currentStage` is where it resumes.
+   * monitoring, or completion. `startItem.currentStage` is where it
+   * resumes; if that machine was removed, the reconciliation rule in the
+   * class doc applies. Machines whose recorded result is already 'success'
+   * are skipped — that's what lets a mid-line monitor completion and a
+   * reconciled item resume without re-running finished work.
    */
   private async advance(startItem: WorkItem): Promise<void> {
-    const config = effectivePipelineConfig(this.store, startItem.projectId);
+    const machines: readonly PipelineMachine[] = effectivePipelineConfig(
+      this.store,
+      startItem.projectId,
+    ).machines;
     const project = this.store.projects().find((p) => p.id === startItem.projectId);
     const id = startItem.id;
 
-    let idx = PIPELINE_STAGE_ORDER.indexOf(startItem.currentStage);
-    if (idx < 0) idx = 0;
+    let idx = machines.findIndex((m) => m.key === startItem.currentStage);
+    if (idx < 0) {
+      // currentStage's machine was removed: resume at the first machine
+      // without a recorded success. -1 means everything succeeded (or the
+      // line is empty) — fall through to completion below.
+      idx = machines.findIndex((m) => startItem.stages[m.key]?.status !== 'success');
+      if (idx < 0) idx = machines.length;
+    }
 
-    for (; idx < PIPELINE_STAGE_ORDER.length; idx++) {
-      const stage = PIPELINE_STAGE_ORDER[idx]!;
-      const cfg = config.stages[stage];
+    for (; idx < machines.length; idx++) {
+      const machine = machines[idx]!;
       const current = this.store.workItems().find((it) => it.id === id);
       if (!current) return; // cancelled underneath us
 
-      if (!cfg.enabled) {
-        await this.updateItem(id, (it) => {
-          it.currentStage = stage;
-          it.status = 'running';
-          it.stages[stage] = { status: 'skipped' };
-        });
-        continue;
-      }
+      if (current.stages[machine.key]?.status === 'success') continue; // already ran
 
-      if (cfg.gate === 'approval' && !(current.approvedStages ?? []).includes(stage)) {
+      if (machine.gate === 'approval' && !(current.approvedStages ?? []).includes(machine.key)) {
         await this.updateItem(id, (it) => {
-          it.currentStage = stage;
+          it.currentStage = machine.key;
           it.status = 'waiting-approval';
-          it.stages[stage] = { status: 'waiting-approval' };
+          it.stages[machine.key] = { status: 'waiting-approval' };
         });
-        console.log(`[pipeline] "${current.title}" (${id.slice(0, 8)}) held for approval at ${stage}`);
+        console.log(`[pipeline] "${current.title}" (${id.slice(0, 8)}) held for approval at ${machine.key}`);
         return;
       }
 
-      if (stage === 'monitor') {
+      if (machine.monitor) {
         await this.updateItem(id, (it) => {
-          it.currentStage = 'monitor';
+          it.currentStage = machine.key;
           it.status = 'monitoring';
-          it.stages.monitor = { status: 'running', checksPassed: 0, startedAt: new Date().toISOString() };
+          it.stages[machine.key] = { status: 'running', checksPassed: 0, startedAt: new Date().toISOString() };
         });
-        console.log(`[pipeline] "${current.title}" (${id.slice(0, 8)}) deployed; monitoring`);
+        console.log(`[pipeline] "${current.title}" (${id.slice(0, 8)}) parked at ${machine.key}; monitoring`);
         return; // MonitorScheduler takes over, off the project queue
       }
 
       const startedAt = new Date().toISOString();
       const runningItem = await this.updateItem(id, (it) => {
-        it.currentStage = stage;
+        it.currentStage = machine.key;
         it.status = 'running';
-        it.stages[stage] = { status: 'running', startedAt };
+        it.stages[machine.key] = { status: 'running', startedAt };
       });
       if (!runningItem) return;
-      this.emit('stageStarted', runningItem, stage);
-      console.log(`[pipeline] "${runningItem.title}" (${id.slice(0, 8)}) running stage ${stage}`);
+      this.emit('stageStarted', runningItem, machine.key);
+      console.log(`[pipeline] "${runningItem.title}" (${id.slice(0, 8)}) running machine ${machine.key}`);
 
       let ok = false;
       let output = '';
       let prompt: string | undefined;
       let error: string | undefined;
-      let session: Awaited<ReturnType<typeof executeStage>>['session'];
+      let session: Awaited<ReturnType<typeof executeMachine>>['session'];
 
       if (!project) {
         error = `project ${startItem.projectId} not found`;
       } else {
         try {
-          const res = await executeStage(
+          const res = await executeMachine(
             {
               store: this.store,
               agentRunner: this.agentRunner,
               ...(this.opts.timeoutMs ? { defaultTimeoutMs: this.opts.timeoutMs } : {}),
             },
             runningItem,
-            stage,
-            cfg,
+            machine,
+            machines,
             project,
           );
           ok = res.ok;
@@ -409,7 +498,7 @@ export class PipelineRunner extends EventEmitter {
 
       await appendStageRun(this.store.paths, {
         workItemId: id,
-        stage,
+        stage: machine.key,
         status: ok ? 'success' : 'failed',
         startedAt,
         finishedAt: new Date().toISOString(),
@@ -419,7 +508,7 @@ export class PipelineRunner extends EventEmitter {
       });
 
       const afterItem = await this.updateItem(id, (it) => {
-        it.stages[stage] = {
+        it.stages[machine.key] = {
           status: ok ? 'success' : 'failed',
           startedAt,
           finishedAt: new Date().toISOString(),
@@ -429,16 +518,16 @@ export class PipelineRunner extends EventEmitter {
         if (session) it.sessions = { ...it.sessions, [session.provider]: session.sessionId };
         if (!ok) it.status = 'failed';
       });
-      if (!afterItem) return; // cancelled while the stage ran
-      this.emit('stageFinished', afterItem, stage, ok);
+      if (!afterItem) return; // cancelled while the machine ran
+      this.emit('stageFinished', afterItem, machine.key, ok);
 
       if (!ok) {
-        console.warn(`[pipeline] "${afterItem.title}" (${id.slice(0, 8)}) failed at ${stage}: ${error?.slice(0, 120)}`);
+        console.warn(`[pipeline] "${afterItem.title}" (${id.slice(0, 8)}) failed at ${machine.key}: ${error?.slice(0, 120)}`);
         return;
       }
     }
 
-    // Every stage ran or was skipped and monitor never took over (disabled).
+    // Every machine ran (or already had a success) and none parked the item.
     const done = await this.updateItem(id, (it) => {
       it.status = 'done';
       it.finishedAt = new Date().toISOString();

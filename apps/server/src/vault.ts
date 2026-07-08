@@ -1,20 +1,30 @@
-import { VAULT_KEY_PATTERN, type Store, type Toolbox, type VaultEntry } from '@claude-hub/core';
+import {
+  VAULT_KEY_PATTERN,
+  type MachineTemplate,
+  type Store,
+  type Toolbox,
+  type VaultEntry,
+} from '@claude-hub/core';
 
 /**
  * Vault entries as the UI sees them: values stripped to a set/unset flag
  * (write-only secrets — no reveal endpoint, ever), plus which toolbox tools
- * require the key. `requiredBy` is derived here, never stored, so deleting a
- * tool can't leave stale back-references.
+ * and machine templates require the key. `requiredBy` is derived here,
+ * never stored, so deleting a tool can't leave stale back-references.
  */
 export interface RedactedVaultEntry {
   key: string;
   valueSet: boolean;
-  requiredBy: { skills: string[]; mcpServers: string[] };
+  requiredBy: { skills: string[]; mcpServers: string[]; machineTemplates: string[] };
   createdAt: string;
   updatedAt: string;
 }
 
-export function redactVault(vault: VaultEntry[], toolbox: Toolbox): RedactedVaultEntry[] {
+export function redactVault(
+  vault: VaultEntry[],
+  toolbox: Toolbox,
+  machineTemplates: MachineTemplate[] = [],
+): RedactedVaultEntry[] {
   return vault.map((entry) => ({
     key: entry.key,
     valueSet: entry.value !== null && entry.value !== '',
@@ -25,6 +35,9 @@ export function redactVault(vault: VaultEntry[], toolbox: Toolbox): RedactedVaul
       mcpServers: toolbox.mcpServers
         .filter((m) => m.requiredEnv?.includes(entry.key))
         .map((m) => m.name),
+      machineTemplates: machineTemplates
+        .filter((t) => t.requiredEnv?.includes(entry.key))
+        .map((t) => t.name),
     },
     createdAt: entry.createdAt,
     updatedAt: entry.updatedAt,

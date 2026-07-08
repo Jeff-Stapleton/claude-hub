@@ -1,8 +1,7 @@
 import {
-  PIPELINE_STAGE_ORDER,
+  type BuiltinMachineSlug,
   type PipelineConfig,
-  type PipelineStageId,
-  type StageConfig,
+  type PipelineMachine,
   type StageRunStatus,
   type WorkItem,
 } from '../../types.js';
@@ -41,17 +40,17 @@ export const BELT_H = 0.18;
 export const LANE_BELT_X0 = HEAD_X + HEAD_W + 0.25;
 
 /**
- * Stage machine slots straddle the belt: each machine is centered on the
- * belt's depth axis so the belt bisects its footprint and runs through a
- * tunnel in its body — work enters the mouth on the -X side and re-emerges
- * past the +X face. SLOT_STEP leaves an open belt run between machines
- * where gates and parked items stay visible (a parked box only clears the
- * previous machine's front face once it is ~0.72 world units past it,
- * because the iso view ray is (1,1,-1)).
+ * Machine slots straddle the belt: each machine is centered on the belt's
+ * depth axis so the belt bisects its footprint and runs through a tunnel
+ * in its body — work enters the mouth on the -X side and re-emerges past
+ * the +X face. Machines are distributed EQUALLY along the belt, so
+ * inserting one re-spaces the whole lane; MIN_STEP keeps the open belt run
+ * between machines where gates and parked items stay visible (a parked box
+ * only clears the previous machine's front face once it is ~0.72 world
+ * units past it, because the iso view ray is (1,1,-1)).
  */
 export const SLOT_W = 1.15;
 export const SLOT_D = 1.2;
-export const SLOT_STEP = 2.85;
 /** Belt inset from the machine's front/back edges (belt centered). */
 export const MACHINE_BELT_OFFSET = (SLOT_D - BELT_D) / 2;
 export const SLOT_LOCAL_Y = BELT_LOCAL_Y - MACHINE_BELT_OFFSET;
@@ -59,27 +58,90 @@ export const SLOT_LOCAL_Y = BELT_LOCAL_Y - MACHINE_BELT_OFFSET;
 export const TUNNEL_H = 0.62;
 export const TUNNEL_CLEAR = 0.1;
 
-export function slotX(index: number): number {
-  return LANE_BELT_X0 + 0.7 + index * SLOT_STEP;
-}
-
-/** Approval gates sit across the belt just BEFORE the stage they guard. */
-export function gateX(index: number): number {
-  return slotX(index) - 0.5;
-}
-
-/** The exit run past the last machine is long enough that a parked item
- * fully clears the machine's front face in the iso view. */
-export const LANE_BELT_X1 = slotX(PIPELINE_STAGE_ORDER.length - 1) + SLOT_W + 1.2;
-/** Where monitoring items park, by the exit end of the belt. */
-export const EXIT_PARK_X = LANE_BELT_X1 - 0.45;
+/**
+ * Narrowest open belt run allowed on either side of a machine. Derived
+ * from the occlusion floor: a parked box (queued at slot − 0.9) only
+ * clears the previous machine's front face 0.72+ world units past it, so
+ * the gap must stay ≥ 0.9 + 0.72 with margin.
+ */
+export const MIN_GAP = 1.7;
+/** Center-to-center floor below which machines would occlude parked items. */
+export const MIN_STEP = SLOT_W + MIN_GAP;
+/** The classic six-slot room length; lanes keep this size until crowded. */
+export const BASE_BELT_LENGTH = 17.3;
 
 /**
- * Fixed floor width: the belt runs flush into the right wall, where each
- * lane's SHIPPED chute opening sits (ExitChute), so finished work rides
- * straight out of the workshop.
+ * Belt length for a lane with `count` machines under the equal-gap rule
+ * (count + 1 identical open runs). The baseline room fits up to five
+ * machines; beyond that the belt grows just enough to keep every gap at
+ * MIN_GAP.
  */
-export const FLOOR_W = LANE_BELT_X1;
+export function beltLength(count: number): number {
+  return Math.max(BASE_BELT_LENGTH, count * SLOT_W + (count + 1) * MIN_GAP);
+}
+
+/**
+ * Floor width for the workshop: the widest lane's belt runs flush into the
+ * right wall, where each lane's SHIPPED chute opening sits (ExitChute), so
+ * finished work rides straight out of the workshop. All lanes share the
+ * same belt end (the wall); lanes with fewer machines spread them wider.
+ */
+export function floorWidth(maxMachineCount: number): number {
+  return LANE_BELT_X0 + beltLength(maxMachineCount);
+}
+
+/** One hover-insert gap on the open belt between machines (or the ends). */
+export interface LaneGap {
+  /** Insertion index: a machine installed here lands at machines[index]. */
+  index: number;
+  x0: number;
+  x1: number;
+  /** Left edge for the ghost machine previewed inside this gap. */
+  ghostX: number;
+}
+
+export interface LaneGeometry {
+  /** Belt end == the right wall's x. */
+  beltX1: number;
+  /** Machine left edges, one per installed machine. */
+  slotXs: number[];
+  /** Approval-gate x per machine (across the belt just before it). */
+  gateXs: number[];
+  /** Where monitoring items park, by the exit end of the belt. */
+  exitParkX: number;
+  /** machineCount + 1 hover zones tiling the open belt runs. */
+  gaps: LaneGap[];
+}
+
+/**
+ * Per-lane slot geometry: machines distributed so the count + 1 open belt
+ * runs (start → first machine, between machines, last machine → wall) are
+ * all the same width. One machine sits dead center; the gap never drops
+ * below MIN_GAP because beltLength grows first (beltX1 must come from
+ * floorWidth so the belt already grew).
+ */
+export function laneGeometry(machineCount: number, beltX1: number): LaneGeometry {
+  const gapWidth = (beltX1 - LANE_BELT_X0 - machineCount * SLOT_W) / (machineCount + 1);
+  const slotXs = Array.from(
+    { length: machineCount },
+    (_, i) => LANE_BELT_X0 + gapWidth * (i + 1) + SLOT_W * i,
+  );
+  const gaps: LaneGap[] = [];
+  for (let g = 0; g <= machineCount; g++) {
+    const x0 = g === 0 ? LANE_BELT_X0 : slotXs[g - 1]! + SLOT_W;
+    const x1 = g === machineCount ? beltX1 - 0.2 : slotXs[g]!;
+    const mid = (x0 + x1) / 2 - SLOT_W / 2;
+    const ghostX = Math.min(Math.max(mid, x0 + 0.05), Math.max(x0 + 0.05, x1 - SLOT_W - 0.05));
+    gaps.push({ index: g, x0, x1, ghostX });
+  }
+  return {
+    beltX1,
+    slotXs,
+    gateXs: slotXs.map((x) => x - 0.5),
+    exitParkX: beltX1 - 0.45,
+    gaps,
+  };
+}
 
 /**
  * Orchestrator console + tool box: side by side against the back-left
@@ -137,58 +199,43 @@ export function workshopFloorDepth(projectCount: number): number {
   return floorDepth(projectCount + 1);
 }
 
-export function stageIndex(stage: PipelineStageId): number {
-  const idx = PIPELINE_STAGE_ORDER.indexOf(stage);
-  return idx >= 0 ? idx : 0;
-}
-
 /**
- * Lane-local belt slot for a live work item, keyed off its stage + status:
- * queued and held items wait on the open belt run before the machine,
- * running items ride INSIDE the machine (the body occludes them — work
- * went in the mouth and will come out the other side), failed items are
- * spat back out at the mouth, and monitoring items park by the belt exit.
- * The lane adds laneY(k) to the returned y. Slots are fixed by stage index
- * regardless of which machines are installed, so an item transiting a
- * skipped stage still has a well-defined position.
+ * Lane-local belt slot for a live work item, keyed off its machine +
+ * status: queued and held items wait on the open belt run before the
+ * machine, running items ride INSIDE the machine (the body occludes them —
+ * work went in the mouth and will come out the other side), failed items
+ * are spat back out at the mouth, and monitoring items park by the belt
+ * exit. The lane adds laneY(k) to the returned y. An unknown machine key
+ * (edited out from under the item) clamps to the belt start.
  */
-export function itemSlot(item: Pick<WorkItem, 'currentStage' | 'status'>): {
-  x: number;
-  y: number;
-  z: number;
-} {
-  const i = stageIndex(item.currentStage);
+export function itemSlot(
+  item: Pick<WorkItem, 'currentStage' | 'status'>,
+  machineKeys: readonly string[],
+  geo: LaneGeometry,
+): { x: number; y: number; z: number } {
+  const idx = Math.max(0, machineKeys.indexOf(item.currentStage));
+  const sx = geo.slotXs[idx] ?? LANE_BELT_X0 + MIN_GAP;
+  const gx = geo.gateXs[idx] ?? sx - 0.5;
   const y = BELT_LOCAL_Y + 0.06;
   const z = BELT_H;
   const onBelt = (x: number): { x: number; y: number; z: number } => ({
-    x: Math.min(LANE_BELT_X1 - 0.35, Math.max(LANE_BELT_X0 + 0.05, x)),
+    x: Math.min(geo.beltX1 - 0.35, Math.max(LANE_BELT_X0 + 0.05, x)),
     y,
     z,
   });
   switch (item.status) {
     case 'waiting-approval':
-      return onBelt(gateX(i) - 0.45);
+      return onBelt(gx - 0.45);
     case 'running':
-      return onBelt(slotX(i) + SLOT_W / 2 - 0.14);
+      return onBelt(sx + SLOT_W / 2 - 0.14);
     case 'failed':
-      return onBelt(slotX(i) - 0.45);
+      return onBelt(sx - 0.45);
     case 'monitoring':
-      return onBelt(EXIT_PARK_X);
+      return onBelt(geo.exitParkX);
     case 'queued':
     default:
-      return onBelt(slotX(i) - 0.9);
+      return onBelt(sx - 0.9);
   }
-}
-
-/**
- * Where the lane's "+" ghost slot sits: the first not-yet-installed
- * stage's slot, or null when every machine is installed.
- */
-export function ghostSlotIndex(stages: PipelineConfig['stages']): number | null {
-  for (let i = 0; i < PIPELINE_STAGE_ORDER.length; i++) {
-    if (!stages[PIPELINE_STAGE_ORDER[i]!].enabled) return i;
-  }
-  return null;
 }
 
 /** Horizontal strip reserved for the docked panels (x 28..~500). */
@@ -224,64 +271,66 @@ export function sceneTransform(
 }
 
 /**
- * Aggregate per-stage status across one project's live items so a
- * station's screen/lamp reflects whatever is happening at it right now.
- * Priority: failure > held > running > recent success.
+ * Aggregate per-machine status across one project's live items so a
+ * machine's screen/lamp reflects whatever is happening at it right now.
+ * Priority: failure > held > running > recent success. Keys are machine
+ * keys (== WorkItem.stages keys).
  */
-export function deriveStageActivity(
-  items: WorkItem[],
-): Partial<Record<PipelineStageId, StageRunStatus>> {
-  const activity: Partial<Record<PipelineStageId, StageRunStatus>> = {};
+export function deriveMachineActivity(items: WorkItem[]): Record<string, StageRunStatus> {
+  const activity: Record<string, StageRunStatus> = {};
   const priority: Record<string, number> = { failed: 4, 'waiting-approval': 3, running: 2, success: 1 };
+  const bump = (key: string, status: StageRunStatus): void => {
+    const current = activity[key];
+    if (!current || priority[status]! > priority[current]!) activity[key] = status;
+  };
   for (const item of items) {
-    for (const stage of PIPELINE_STAGE_ORDER) {
-      let status = item.stages[stage]?.status;
-      if (item.status === 'monitoring' && stage === 'monitor') status = 'running';
-      if (!status || !(status in priority)) continue;
-      const current = activity[stage];
-      if (!current || priority[status]! > priority[current]!) activity[stage] = status;
+    for (const [key, result] of Object.entries(item.stages)) {
+      const status = result?.status;
+      if (status && status in priority) bump(key, status);
     }
+    // A parked monitoring item reads as active work at its machine.
+    if (item.status === 'monitoring') bump(item.currentStage, 'running');
   }
   return activity;
 }
 
-export interface StageMeta {
-  id: PipelineStageId;
-  label: string;
-  blurb: string;
-}
-
-export const STAGE_META: Record<PipelineStageId, StageMeta> = {
-  intake: { id: 'intake', label: 'INTAKE', blurb: 'triage incoming requests' },
-  spec: { id: 'spec', label: 'SPEC', blurb: 'plan the work' },
-  code: { id: 'code', label: 'CODE', blurb: 'implement the change' },
-  test: { id: 'test', label: 'TEST', blurb: 'validate the build' },
-  deploy: { id: 'deploy', label: 'DEPLOY', blurb: 'ship it' },
-  monitor: { id: 'monitor', label: 'MONITOR', blurb: 'watch production' },
+/** Labels/blurbs for the built-in template gallery + machine tooltips. */
+export const TEMPLATE_META: Record<BuiltinMachineSlug, { label: string; blurb: string }> = {
+  intake: { label: 'INTAKE', blurb: 'triage incoming requests' },
+  spec: { label: 'SPEC', blurb: 'plan the work' },
+  code: { label: 'CODE', blurb: 'implement the change' },
+  test: { label: 'TEST', blurb: 'validate the build' },
+  deploy: { label: 'DEPLOY', blurb: 'ship it' },
+  monitor: { label: 'MONITOR', blurb: 'watch production' },
 };
 
+/** Machine nameplate text: the display name, uppercased and clamped. */
+export function machineLabel(machine: Pick<PipelineMachine, 'name' | 'key'>): string {
+  return (machine.name || machine.key).toUpperCase().slice(0, 14);
+}
+
 /**
- * Mirror of the server's defaults (packages/pipeline/src/defaults.ts) so
- * a lane renders sensibly before a project has stored config. Blank line:
- * every stage disabled until its machine is installed. The server's
- * effective config always wins once state arrives.
+ * Unique-in-line machine key from a display name: slugified, `-2`-suffixed
+ * on collision (`code`, `code-2`, …). Mirrors MACHINE_KEY_PATTERN.
+ */
+export function machineKeyFor(name: string, existing: readonly string[]): string {
+  const base =
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'machine';
+  if (!existing.includes(base)) return base;
+  let n = 2;
+  while (existing.includes(`${base}-${n}`)) n++;
+  return `${base}-${n}`;
+}
+
+/**
+ * Blank-line default, mirroring the server (packages/pipeline/src/
+ * defaults.ts): no machines until the user installs one. The server's
+ * config always wins once state arrives.
  */
 export function defaultPipeline(projectId: string): PipelineConfig {
-  const stage = (overrides?: Partial<StageConfig>): StageConfig => ({
-    enabled: false,
-    gate: 'auto',
-    ...overrides,
-  });
-  return {
-    projectId,
-    stages: {
-      intake: stage(),
-      spec: stage(),
-      code: stage(),
-      test: stage(),
-      deploy: stage({ gate: 'approval' }),
-      monitor: stage({ intervalMinutes: 30, maxChecks: 3 }),
-    },
-    updatedAt: '',
-  };
+  return { projectId, machines: [], updatedAt: '' };
 }

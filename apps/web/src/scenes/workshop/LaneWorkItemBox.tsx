@@ -1,6 +1,5 @@
 import type { WorkItem } from '../../types.js';
 import { iso, isoBoxPoints, poly } from '../iso.js';
-import { itemSlot } from './layout.js';
 import { Workstation } from './Workstation.jsx';
 
 const BOX_W = 0.3;
@@ -16,17 +15,19 @@ const BOX_H = 0.26;
  */
 export function LaneWorkItemBox({
   item,
+  slot,
   laneOriginY,
   selected,
   onSelect,
 }: {
   item: WorkItem;
+  /** Lane-local belt slot (itemSlot), computed by the lane from its geometry. */
+  slot: { x: number; y: number; z: number };
   /** World y of the lane band's front edge (laneY(k)). */
   laneOriginY: number;
   selected: boolean;
   onSelect: () => void;
 }): JSX.Element {
-  const slot = itemSlot(item);
   const origin = iso(0, 0, 0);
   const target = iso(slot.x, laneOriginY + slot.y, slot.z);
   const dx = target.x - origin.x;

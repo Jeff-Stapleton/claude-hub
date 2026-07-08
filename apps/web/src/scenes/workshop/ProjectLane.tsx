@@ -1,8 +1,9 @@
+import { useEffect, useRef, useState } from 'react';
 import type { ActivityEntry } from '../../api.js';
-import type { PipelineConfig, PipelineStageId, Project, WorkItem } from '../../types.js';
-import { PIPELINE_STAGE_ORDER } from '../../types.js';
+import type { PipelineConfig, Project, WorkItem } from '../../types.js';
 import { DepthSorted, iso, type SceneEntity } from '../iso.js';
 import { Belt } from './Belt.jsx';
+import { GapZone } from './GapZone.jsx';
 import { GateArch } from './GateArch.jsx';
 import { GhostSlot } from './GhostSlot.jsx';
 import { LaneHeadMachine } from './LaneHeadMachine.jsx';
@@ -12,37 +13,37 @@ import {
   HEAD_LOCAL_Y,
   HEAD_X,
   LANE_BELT_X0,
-  LANE_BELT_X1,
   SLOT_LOCAL_Y,
-  deriveStageActivity,
-  gateX,
-  ghostSlotIndex,
+  deriveMachineActivity,
   itemSlot,
+  laneGeometry,
   laneY,
-  slotX,
 } from './layout.js';
-import { StageMachine } from './StageMachine.jsx';
+import { Machine } from './StageMachine.jsx';
 
 /**
- * One project's assembly lane: head machine, belt, installed stage
- * machines, approval gates, live work items, and the "+" ghost slot.
- * Everything floor-standing is routed through DepthSorted; layers keep
- * the flat belt under the thin gates under the volumetric boxes, per the
- * repo's iso z-order convention.
+ * One project's assembly lane: head machine, belt, installed machines,
+ * approval gates, live work items, and the hover-insert gap zones. Mousing
+ * over any open belt run previews a ghost machine in that gap; clicking it
+ * opens the add-machine panel at that insertion index. Everything
+ * floor-standing is routed through DepthSorted; layers keep the flat belt
+ * under the gap zones under the thin gates under the volumetric boxes, per
+ * the repo's iso z-order convention.
  */
 export function ProjectLane({
   project,
   laneIndex,
   config,
   items,
+  beltX1,
   triggerActivity,
-  selectedStage,
+  selectedMachineKey,
   selectedItemId,
   removing,
-  onSelectStage,
+  onSelectMachine,
   onSelectItem,
   onOpenIntake,
-  onOpenAddStage,
+  onOpenAddMachine,
   onOpenSettings,
   onRemove,
 }: {
@@ -50,14 +51,16 @@ export function ProjectLane({
   laneIndex: number;
   config: PipelineConfig;
   items: WorkItem[];
+  /** Belt end == floor width; shared by every lane (the right wall). */
+  beltX1: number;
   triggerActivity: ActivityEntry[];
-  selectedStage: PipelineStageId | null;
+  selectedMachineKey: string | null;
   selectedItemId: string | null;
   removing: boolean;
-  onSelectStage: (stage: PipelineStageId) => void;
+  onSelectMachine: (key: string) => void;
   onSelectItem: (itemId: string) => void;
   onOpenIntake: () => void;
-  onOpenAddStage: () => void;
+  onOpenAddMachine: (insertIndex: number) => void;
   onOpenSettings: () => void;
   onRemove: () => void;
 }): JSX.Element {
@@ -65,17 +68,36 @@ export function ProjectLane({
   const beltY = y0 + BELT_LOCAL_Y;
   const slotY = y0 + SLOT_LOCAL_Y;
   const label = project.name;
-  const stageActivity = deriveStageActivity(items);
+  const machines = config.machines;
+  const machineKeys = machines.map((m) => m.key);
+  const geo = laneGeometry(machines.length, beltX1);
+  const activity = deriveMachineActivity(items);
   const anythingRunning = items.some((it) => it.status === 'running');
-  const ghostIndex = ghostSlotIndex(config.stages);
-  const installedCount = PIPELINE_STAGE_ORDER.filter((s) => config.stages[s].enabled).length;
+
+  // Hovered gap index (null = no ghost). Moving the pointer from the flat
+  // gap quad onto the ghost projected above it fires the quad's mouseleave;
+  // the short grace delay plus the keepalive handlers on the ghost keep the
+  // preview stable instead of flickering.
+  const [hoveredGap, setHoveredGap] = useState<number | null>(null);
+  const clearTimer = useRef<number | undefined>(undefined);
+  useEffect(() => () => window.clearTimeout(clearTimer.current), []);
+  const hoverGap = (g: number, on: boolean): void => {
+    window.clearTimeout(clearTimer.current);
+    if (on) setHoveredGap(g);
+    else {
+      clearTimer.current = window.setTimeout(
+        () => setHoveredGap((cur) => (cur === g ? null : cur)),
+        120,
+      );
+    }
+  };
 
   const entities: SceneEntity[] = [
     {
       key: 'belt',
       anchor: { x: LANE_BELT_X0, y: beltY },
       layer: 0,
-      node: <Belt x0={LANE_BELT_X0} x1={LANE_BELT_X1} y={beltY} moving={anythingRunning} />,
+      node: <Belt x0={LANE_BELT_X0} x1={geo.beltX1} y={beltY} moving={anythingRunning} />,
     },
     {
       key: 'head',
@@ -98,62 +120,92 @@ export function ProjectLane({
     },
   ];
 
-  for (let i = 0; i < PIPELINE_STAGE_ORDER.length; i++) {
-    const stage = PIPELINE_STAGE_ORDER[i]!;
-    const stageConfig = config.stages[stage];
-    if (!stageConfig.enabled) continue;
-
+  machines.forEach((machine, i) => {
     entities.push({
-      key: `machine-${stage}`,
-      anchor: { x: slotX(i), y: slotY },
+      key: `machine-${machine.key}`,
+      anchor: { x: geo.slotXs[i]!, y: slotY },
       layer: 2,
       node: (
-        <StageMachine
-          stage={stage}
-          x={slotX(i)}
+        <Machine
+          machine={machine}
+          x={geo.slotXs[i]!}
           y={slotY}
-          config={stageConfig}
-          activity={stageActivity[stage]}
-          selected={selectedStage === stage}
-          onSelect={() => onSelectStage(stage)}
+          activity={activity[machine.key]}
+          selected={selectedMachineKey === machine.key}
+          onSelect={() => onSelectMachine(machine.key)}
         />
       ),
     });
 
-    if (stageConfig.gate === 'approval') {
+    if (machine.gate === 'approval') {
       entities.push({
-        key: `gate-${stage}`,
-        anchor: { x: gateX(i), y: beltY },
+        key: `gate-${machine.key}`,
+        anchor: { x: geo.gateXs[i]!, y: beltY },
         layer: 1,
         node: (
           <GateArch
-            x={gateX(i)}
+            x={geo.gateXs[i]!}
             beltY={beltY}
-            held={items.some((it) => it.status === 'waiting-approval' && it.currentStage === stage)}
+            held={items.some(
+              (it) => it.status === 'waiting-approval' && it.currentStage === machine.key,
+            )}
           />
         ),
       });
     }
+  });
+
+  // Hover-insert gap zones tile the open belt runs (machines.length + 1).
+  for (const gap of geo.gaps) {
+    const position =
+      gap.index === 0
+        ? 'at the start of'
+        : gap.index === machines.length
+          ? 'at the end of'
+          : `at position ${gap.index + 1} on`;
+    entities.push({
+      key: `gap-${gap.index}`,
+      anchor: { x: gap.x0, y: slotY },
+      layer: 1,
+      node: (
+        <GapZone
+          x0={gap.x0}
+          x1={gap.x1}
+          y={slotY}
+          label={`Insert a machine ${position} ${label}'s line`}
+          onHoverChange={(on) => hoverGap(gap.index, on)}
+          onActivate={() => onOpenAddMachine(gap.index)}
+        />
+      ),
+    });
   }
 
-  if (ghostIndex !== null) {
+  if (hoveredGap !== null && geo.gaps[hoveredGap]) {
+    const gap = geo.gaps[hoveredGap]!;
     entities.push({
       key: 'ghost',
-      anchor: { x: slotX(ghostIndex), y: slotY },
+      anchor: { x: gap.ghostX, y: slotY },
       layer: 2,
       node: (
-        <GhostSlot
-          x={slotX(ghostIndex)}
-          y={slotY}
-          projectLabel={label}
-          onActivate={onOpenAddStage}
-        />
+        // Keepalive wrapper: hovering the ghost itself counts as hovering
+        // its gap, cancelling the quad's pending clear.
+        <g
+          onMouseEnter={() => hoverGap(gap.index, true)}
+          onMouseLeave={() => hoverGap(gap.index, false)}
+        >
+          <GhostSlot
+            x={gap.ghostX}
+            y={slotY}
+            projectLabel={label}
+            onActivate={() => onOpenAddMachine(gap.index)}
+          />
+        </g>
       ),
     });
   }
 
   for (const item of items) {
-    const slot = itemSlot(item);
+    const slot = itemSlot(item, machineKeys, geo);
     entities.push({
       key: `item-${item.id}`,
       anchor: { x: slot.x, y: y0 + slot.y, z: slot.z },
@@ -161,6 +213,7 @@ export function ProjectLane({
       node: (
         <LaneWorkItemBox
           item={item}
+          slot={slot}
           laneOriginY={y0}
           selected={selectedItemId === item.id}
           onSelect={() => onSelectItem(item.id)}
@@ -169,14 +222,14 @@ export function ProjectLane({
     });
   }
 
-  const hint = iso((LANE_BELT_X0 + LANE_BELT_X1) / 2, beltY - 0.25, 0.05);
+  const hint = iso((LANE_BELT_X0 + geo.beltX1) / 2, beltY - 0.25, 0.05);
 
   return (
     <g>
       <DepthSorted entities={entities} />
-      {installedCount === 0 ? (
+      {machines.length === 0 ? (
         <text x={hint.x} y={hint.y} textAnchor="middle" fontSize={11} fill="#c8a888" opacity={0.6} fontStyle="italic">
-          empty line — click the + slot to install a machine
+          empty line — hover the belt to add a machine
         </text>
       ) : null}
     </g>

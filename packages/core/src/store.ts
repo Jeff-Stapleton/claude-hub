@@ -6,19 +6,26 @@ import { basename, dirname, join } from 'node:path';
 import { HubPaths } from './paths.js';
 import {
   type AgentProviderConfigs,
+  type AgentProviderId,
+  BUILTIN_MACHINE_SLUGS,
+  type BuiltinMachineSlug,
   STORE_SCHEMA_VERSION,
   type AppConfig,
   type Channel,
   type GitCredential,
+  type MachineTemplate,
   type OrchestratorState,
   type PipelineConfig,
+  type PipelineMachine,
   type Project,
+  type StageGate,
   type StoreEntityKey,
   type StoreSnapshot,
   type Toolbox,
   type Trigger,
   type VaultEntry,
   type WorkItem,
+  builtinTemplateId,
 } from './types.js';
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -66,6 +73,7 @@ function emptySnapshot(): StoreSnapshot {
     pipelines: [],
     workItems: [],
     toolbox: { skills: [], mcpServers: [] },
+    machineTemplates: [],
     gitCredentials: [],
     vault: [],
   };
@@ -140,9 +148,26 @@ export class Store extends EventEmitter {
     fresh.channels = await readJsonOrDefault(this.paths.file('channels'), fresh.channels);
     fresh.triggers = await readJsonOrDefault(this.paths.file('triggers'), fresh.triggers);
     fresh.orchestrator = await readJsonOrDefault(this.paths.file('orchestrator'), fresh.orchestrator);
-    fresh.pipelines = await readJsonOrDefault(this.paths.file('pipelines'), fresh.pipelines);
-    fresh.workItems = await readJsonOrDefault(this.paths.file('workItems'), fresh.workItems);
+    const rawPipelines = await readJsonOrDefault<LegacyOrCurrentPipeline[]>(
+      this.paths.file('pipelines'),
+      [],
+    );
+    const pipelinesResult = migrateLegacyPipelines(rawPipelines);
+    fresh.pipelines = pipelinesResult.pipelines;
+    if (pipelinesResult.migrated) {
+      await writeJsonAtomic(this.paths.file('pipelines'), fresh.pipelines);
+    }
+    const rawWorkItems = await readJsonOrDefault<WorkItem[]>(this.paths.file('workItems'), []);
+    const workItemsResult = migrateLegacyWorkItems(rawWorkItems, fresh.pipelines);
+    fresh.workItems = workItemsResult.workItems;
+    if (workItemsResult.migrated) {
+      await writeJsonAtomic(this.paths.file('workItems'), fresh.workItems);
+    }
     fresh.toolbox = await readJsonOrDefault(this.paths.file('toolbox'), fresh.toolbox);
+    fresh.machineTemplates = await readJsonOrDefault(
+      this.paths.file('machineTemplates'),
+      fresh.machineTemplates,
+    );
     fresh.gitCredentials = await readJsonOrDefault(
       this.paths.file('gitCredentials'),
       fresh.gitCredentials,
@@ -190,6 +215,10 @@ export class Store extends EventEmitter {
 
   toolbox(): Toolbox {
     return this.get().toolbox;
+  }
+
+  machineTemplates(): MachineTemplate[] {
+    return this.get().machineTemplates;
   }
 
   gitCredentials(): GitCredential[] {
@@ -323,6 +352,115 @@ function migrateLegacyProjects(raw: LegacyOrCurrentProject[]): {
   return { projects, migrated };
 }
 
+/** Pre-v7 per-stage pipeline config (fixed six-stage record). */
+interface LegacyStageConfig {
+  enabled: boolean;
+  gate: StageGate;
+  promptTemplate?: string;
+  provider?: AgentProviderId;
+  commands?: string[];
+  timeoutMs?: number;
+  skills?: string[];
+  mcpServers?: string[];
+  /** Monitor stage only. */
+  intervalMinutes?: number;
+  maxChecks?: number;
+}
+
+interface LegacyPipelineConfig {
+  projectId: string;
+  stages: Record<string, LegacyStageConfig>;
+  updatedAt: string;
+}
+
+type LegacyOrCurrentPipeline = LegacyPipelineConfig | PipelineConfig;
+
+const BUILTIN_MACHINE_NAMES: Record<BuiltinMachineSlug, string> = {
+  intake: 'Intake',
+  spec: 'Spec',
+  code: 'Code',
+  test: 'Test',
+  deploy: 'Deploy',
+  monitor: 'Monitor',
+};
+
+/**
+ * v6 -> v7: the fixed-key stage record becomes an ordered machine array.
+ * Enabled stages become machine instances keyed by their old stage id (in
+ * classic line order); disabled stages drop. Test/monitor capability flags
+ * are materialized onto the instances so no per-stage special-casing
+ * survives in the runtime.
+ */
+function migrateLegacyPipelines(raw: LegacyOrCurrentPipeline[]): {
+  pipelines: PipelineConfig[];
+  migrated: boolean;
+} {
+  let migrated = false;
+  const pipelines = raw.map((p): PipelineConfig => {
+    if ('machines' in p && Array.isArray(p.machines)) return p;
+    migrated = true;
+    const legacy = p as LegacyPipelineConfig;
+    const machines: PipelineMachine[] = [];
+    for (const slug of BUILTIN_MACHINE_SLUGS) {
+      const s = legacy.stages[slug];
+      if (!s?.enabled) continue;
+      machines.push({
+        key: slug,
+        name: BUILTIN_MACHINE_NAMES[slug],
+        templateId: builtinTemplateId(slug),
+        gate: s.gate ?? 'auto',
+        ...(s.promptTemplate !== undefined ? { promptTemplate: s.promptTemplate } : {}),
+        ...(s.provider !== undefined ? { provider: s.provider } : {}),
+        ...(s.commands !== undefined ? { commands: s.commands } : {}),
+        ...(s.timeoutMs !== undefined ? { timeoutMs: s.timeoutMs } : {}),
+        ...(s.skills?.length ? { skills: s.skills } : {}),
+        ...(s.mcpServers?.length ? { mcpServers: s.mcpServers } : {}),
+        ...(slug === 'test' ? { resultCheck: 'lenient' as const } : {}),
+        ...(slug === 'monitor'
+          ? {
+              resultCheck: 'strict' as const,
+              monitor: {
+                intervalMinutes: s.intervalMinutes ?? 30,
+                maxChecks: s.maxChecks ?? 3,
+              },
+            }
+          : {}),
+      });
+    }
+    return { projectId: legacy.projectId, machines, updatedAt: legacy.updatedAt };
+  });
+  return { pipelines, migrated };
+}
+
+/**
+ * v6 -> v7 work-item cleanup. Built-in machine keys equal the old stage
+ * ids, so `currentStage`/`approvedStages`/result keys carry over verbatim;
+ * the only change is dropping the six-slot `pending` pre-seeding for stages
+ * that are not installed machines on the migrated line. Real results (any
+ * status other than pending/skipped) are always retained, even for machines
+ * since removed — history stays truthful.
+ */
+function migrateLegacyWorkItems(
+  raw: WorkItem[],
+  pipelines: PipelineConfig[],
+): { workItems: WorkItem[]; migrated: boolean } {
+  let migrated = false;
+  const keysByProject = new Map<string, Set<string>>(
+    pipelines.map((p) => [p.projectId, new Set(p.machines.map((m) => m.key))]),
+  );
+  const workItems = raw.map((item): WorkItem => {
+    const installed = keysByProject.get(item.projectId);
+    const kept = Object.entries(item.stages).filter(
+      ([key, result]) =>
+        (result.status !== 'pending' && result.status !== 'skipped') || installed?.has(key),
+    );
+    if (kept.length === Object.keys(item.stages).length) return item;
+    migrated = true;
+    return { ...item, stages: Object.fromEntries(kept) };
+  });
+  return { workItems, migrated };
+}
+
 function mergeConfigDefaults(persisted: Partial<AppConfig>): AppConfig {
   const rawProviders = (persisted.providers ?? {}) as Partial<AgentProviderConfigs>;
   const config: AppConfig = {
@@ -330,15 +468,17 @@ function mergeConfigDefaults(persisted: Partial<AppConfig>): AppConfig {
     ...persisted,
     // v1 -> v2 -> v3 -> v4 and v5 -> v6 are purely additive (new files
     // default to [], new optional fields back-filled here), so older stores
-    // coerce forward. v4 -> v5 additionally reshapes projects, handled by
-    // migrateLegacyProjects during load.
+    // coerce forward. v4 -> v5 additionally reshapes projects (handled by
+    // migrateLegacyProjects during load); v6 -> v7 reshapes pipelines and
+    // work items (migrateLegacyPipelines / migrateLegacyWorkItems).
     schemaVersion:
       persisted.schemaVersion === undefined ||
       persisted.schemaVersion === 1 ||
       persisted.schemaVersion === 2 ||
       persisted.schemaVersion === 3 ||
       persisted.schemaVersion === 4 ||
-      persisted.schemaVersion === 5
+      persisted.schemaVersion === 5 ||
+      persisted.schemaVersion === 6
         ? STORE_SCHEMA_VERSION
         : persisted.schemaVersion,
     defaultProvider: persisted.defaultProvider ?? DEFAULT_CONFIG.defaultProvider,

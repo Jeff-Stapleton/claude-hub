@@ -1,14 +1,15 @@
-import type { WorkItem } from '../../types.js';
-import { PIPELINE_STAGE_ORDER } from '../../types.js';
-import { STAGE_META } from './layout.js';
+import type { PipelineMachine, WorkItem } from '../../types.js';
 import * as s from './panelStyles.js';
 
 /**
- * Detail panel for a selected work item: stage timeline, latest
- * output/error, and the approve / retry / cancel actions.
+ * Detail panel for a selected work item: machine timeline, latest
+ * output/error, and the approve / retry / cancel actions. The timeline
+ * walks the project's current line in order and appends any orphan result
+ * keys (machines since removed) so history stays visible.
  */
 export function WorkItemPanel({
   item,
+  machines,
   isPending,
   error,
   onApprove,
@@ -17,6 +18,8 @@ export function WorkItemPanel({
   onClose,
 }: {
   item: WorkItem;
+  /** The project's current line, for timeline order + display names. */
+  machines: PipelineMachine[];
   isPending: boolean;
   error: unknown;
   onApprove: () => void;
@@ -26,6 +29,11 @@ export function WorkItemPanel({
 }): JSX.Element {
   const current = item.stages[item.currentStage];
   const detail = current?.error ?? current?.output;
+  const lineKeys = machines.map((m) => m.key);
+  const orphanKeys = Object.keys(item.stages).filter((key) => !lineKeys.includes(key));
+  const timelineKeys = [...lineKeys, ...orphanKeys];
+  const nameFor = (key: string): string =>
+    machines.find((m) => m.key === key)?.name.toUpperCase() ?? key.toUpperCase();
 
   return (
     <foreignObject x={28} y={90} width={470} height={540}>
@@ -37,19 +45,22 @@ export function WorkItemPanel({
           </button>
         </div>
         <div style={s.panelHint}>
-          {item.source} request · {statusLabel(item)}
+          {item.source} request · {statusLabel(item, nameFor)}
         </div>
 
         <div style={timeline}>
-          {PIPELINE_STAGE_ORDER.map((stage) => {
-            const result = item.stages[stage];
+          {timelineKeys.map((key) => {
+            const result = item.stages[key];
             return (
-              <div key={stage} style={timelineRow}>
+              <div key={key} style={timelineRow}>
                 <span style={{ ...dot, background: dotColor(result?.status) }} />
-                <span style={{ fontFamily: 'monospace', fontSize: 11 }}>{STAGE_META[stage].label}</span>
+                <span style={{ fontFamily: 'monospace', fontSize: 11 }}>
+                  {nameFor(key)}
+                  {lineKeys.includes(key) ? '' : ' (removed)'}
+                </span>
                 <span style={{ ...s.panelHint, marginLeft: 'auto' }}>
                   {result?.status ?? 'pending'}
-                  {stage === 'monitor' && result?.checksPassed ? ` (${result.checksPassed} ok)` : ''}
+                  {result?.checksPassed ? ` (${result.checksPassed} ok)` : ''}
                 </span>
               </div>
             );
@@ -61,12 +72,12 @@ export function WorkItemPanel({
         <div style={s.panelRow}>
           {item.status === 'waiting-approval' ? (
             <button type="button" onClick={onApprove} disabled={isPending} style={s.panelButton}>
-              {isPending ? 'Working…' : `Approve ${STAGE_META[item.currentStage].label.toLowerCase()}`}
+              {isPending ? 'Working…' : `Approve ${nameFor(item.currentStage).toLowerCase()}`}
             </button>
           ) : null}
           {item.status === 'failed' ? (
             <button type="button" onClick={onRetry} disabled={isPending} style={s.panelButton}>
-              {isPending ? 'Working…' : 'Retry stage'}
+              {isPending ? 'Working…' : 'Retry machine'}
             </button>
           ) : null}
           <button type="button" onClick={onCancel} disabled={isPending} style={s.panelDangerButton}>
@@ -79,16 +90,16 @@ export function WorkItemPanel({
   );
 }
 
-function statusLabel(item: WorkItem): string {
+function statusLabel(item: WorkItem, nameFor: (key: string) => string): string {
   switch (item.status) {
     case 'waiting-approval':
-      return `waiting for approval at ${STAGE_META[item.currentStage].label.toLowerCase()}`;
+      return `waiting for approval at ${nameFor(item.currentStage).toLowerCase()}`;
     case 'running':
-      return `running ${STAGE_META[item.currentStage].label.toLowerCase()}`;
+      return `running ${nameFor(item.currentStage).toLowerCase()}`;
     case 'failed':
-      return `failed at ${STAGE_META[item.currentStage].label.toLowerCase()}`;
+      return `failed at ${nameFor(item.currentStage).toLowerCase()}`;
     case 'monitoring':
-      return 'deployed — monitoring production';
+      return `parked at ${nameFor(item.currentStage).toLowerCase()} — monitoring`;
     default:
       return item.status;
   }

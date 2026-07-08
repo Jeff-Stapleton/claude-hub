@@ -300,14 +300,14 @@ describe('UIState vault redaction', () => {
       {
         key: 'GITHUB_TOKEN',
         valueSet: true,
-        requiredBy: { skills: ['github-helper'], mcpServers: [] },
+        requiredBy: { skills: ['github-helper'], mcpServers: [], machineTemplates: [] },
         createdAt: now,
         updatedAt: now,
       },
       {
         key: 'AWS_REGION',
         valueSet: false,
-        requiredBy: { skills: [], mcpServers: [] },
+        requiredBy: { skills: [], mcpServers: [], machineTemplates: [] },
         createdAt: now,
         updatedAt: now,
       },

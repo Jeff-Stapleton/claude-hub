@@ -3,7 +3,7 @@ import type { CreateProjectBody } from '../../api.js';
 import type { RedactedGitCredential, Toolbox } from '../../types.js';
 import * as s from './panelStyles.js';
 import { RepoEditor, emptyRepoDraft, isDraftValid, toRepoInput, type RepoDraft } from './RepoEditor.jsx';
-import { ToolPicker } from './StationConfigPanel.jsx';
+import { ToolPicker } from './MachineConfigPanel.jsx';
 
 type Step = 'basics' | 'repos' | 'extras';
 

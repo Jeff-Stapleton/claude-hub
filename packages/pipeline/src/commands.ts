@@ -11,14 +11,16 @@ export interface RunCommandsResult {
 
 /**
  * Runs shell commands sequentially in the project cwd, stopping at the
- * first non-zero exit. Used by the test/deploy/monitor stages.
+ * first non-zero exit. Used by machines configured with commands. The
+ * machine's resolved vault variables are layered over process.env so
+ * commands see the same env as the agent run.
  *
  * This is generic shell execution, deliberately NOT routed through
  * @claude-hub/agent-runner — that boundary exists for provider CLIs only.
  */
 export async function runCommands(
   commands: string[],
-  opts: { cwd: string; timeoutMs: number },
+  opts: { cwd: string; timeoutMs: number; env?: Record<string, string> },
 ): Promise<RunCommandsResult> {
   const chunks: string[] = [];
   const deadline = Date.now() + opts.timeoutMs;
@@ -29,7 +31,7 @@ export async function runCommands(
       return { ok: false, output: chunks.join('\n'), failedCommand: command, timedOut: true };
     }
     chunks.push(`$ ${command}`);
-    const res = await runOne(command, opts.cwd, remaining);
+    const res = await runOne(command, opts.cwd, remaining, opts.env);
     if (res.output) chunks.push(res.output);
     if (res.timedOut) {
       return { ok: false, output: chunks.join('\n'), failedCommand: command, timedOut: true };
@@ -50,9 +52,15 @@ function runOne(
   command: string,
   cwd: string,
   timeoutMs: number,
+  env?: Record<string, string>,
 ): Promise<{ exitCode: number | null; output: string; timedOut: boolean }> {
   return new Promise((resolve) => {
-    const child = spawn(command, { shell: true, cwd, windowsHide: true });
+    const child = spawn(command, {
+      shell: true,
+      cwd,
+      windowsHide: true,
+      ...(env !== undefined ? { env: { ...process.env, ...env } } : {}),
+    });
     let output = '';
     let timedOut = false;
     let settled = false;

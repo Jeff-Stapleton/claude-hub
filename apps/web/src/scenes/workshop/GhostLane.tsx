@@ -6,7 +6,6 @@ import {
   HEAD_W,
   HEAD_X,
   LANE_BELT_X0,
-  LANE_BELT_X1,
 } from './layout.js';
 import { Workstation } from './Workstation.jsx';
 
@@ -20,10 +19,13 @@ const GHOST_H = 1.0;
  */
 export function GhostLane({
   y0,
+  beltX1,
   onActivate,
 }: {
   /** Lane-band origin y (ghostLaneY(projectCount)). */
   y0: number;
+  /** Belt end (the right wall's x), shared with the real lanes. */
+  beltX1: number;
   onActivate: () => void;
 }): JSX.Element {
   const y = y0 + HEAD_LOCAL_Y;
@@ -37,7 +39,7 @@ export function GhostLane({
     strokeDasharray: '5 5',
   } as const;
   const beltA = iso(LANE_BELT_X0, y0 + BELT_LOCAL_Y, 0.02);
-  const beltB = iso(LANE_BELT_X1, y0 + BELT_LOCAL_Y, 0.02);
+  const beltB = iso(beltX1, y0 + BELT_LOCAL_Y, 0.02);
 
   return (
     <Workstation label="Add a project" onActivate={onActivate}>

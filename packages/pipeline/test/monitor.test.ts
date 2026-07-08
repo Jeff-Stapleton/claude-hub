@@ -1,11 +1,27 @@
-import { HubPaths, Store, type WorkItem } from '@claude-hub/core';
+import { HubPaths, Store, type PipelineConfig, type WorkItem } from '@claude-hub/core';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { defaultPipelineConfig } from '../src/defaults.js';
 import { MonitorScheduler } from '../src/monitor.js';
 import type { PipelineRunner } from '../src/runner.js';
+
+function monitorPipeline(intervalMinutes: number): PipelineConfig {
+  return {
+    projectId: 'proj-1',
+    machines: [
+      {
+        key: 'monitor',
+        name: 'Monitor',
+        templateId: 'builtin-monitor',
+        gate: 'auto',
+        resultCheck: 'strict',
+        monitor: { intervalMinutes, maxChecks: 3 },
+      },
+    ],
+    updatedAt: new Date().toISOString(),
+  };
+}
 
 function monitoringItem(id: string): WorkItem {
   return {
@@ -17,11 +33,6 @@ function monitoringItem(id: string): WorkItem {
     status: 'monitoring',
     currentStage: 'monitor',
     stages: {
-      intake: { status: 'skipped' },
-      spec: { status: 'success' },
-      code: { status: 'success' },
-      test: { status: 'success' },
-      deploy: { status: 'success' },
       monitor: { status: 'running', checksPassed: 0 },
     },
     createdAt: new Date().toISOString(),
@@ -51,9 +62,7 @@ describe('MonitorScheduler', () => {
   });
 
   it('fires checks on the configured interval for monitoring items', async () => {
-    const config = defaultPipelineConfig('proj-1');
-    config.stages.monitor.intervalMinutes = 1;
-    await store.update('pipelines', [config]);
+    await store.update('pipelines', [monitorPipeline(1)]);
     await store.update('workItems', [monitoringItem('wi-1')]);
 
     scheduler = new MonitorScheduler(store, runner);
@@ -68,9 +77,7 @@ describe('MonitorScheduler', () => {
   });
 
   it('disarms when the item leaves monitoring', async () => {
-    const config = defaultPipelineConfig('proj-1');
-    config.stages.monitor.intervalMinutes = 1;
-    await store.update('pipelines', [config]);
+    await store.update('pipelines', [monitorPipeline(1)]);
     await store.update('workItems', [monitoringItem('wi-1')]);
 
     scheduler = new MonitorScheduler(store, runner);
@@ -86,9 +93,7 @@ describe('MonitorScheduler', () => {
   });
 
   it('does not overlap checks when one is still in flight', async () => {
-    const config = defaultPipelineConfig('proj-1');
-    config.stages.monitor.intervalMinutes = 1;
-    await store.update('pipelines', [config]);
+    await store.update('pipelines', [monitorPipeline(1)]);
     await store.update('workItems', [monitoringItem('wi-1')]);
 
     let releaseCheck!: () => void;
