@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { App } from './App.jsx';
+import { MusicControl } from './audio/MusicControl.jsx';
 
 const qc = new QueryClient({
   defaultOptions: {
@@ -20,6 +21,7 @@ createRoot(root).render(
   <StrictMode>
     <QueryClientProvider client={qc}>
       <App />
+      <MusicControl />
     </QueryClientProvider>
   </StrictMode>,
 );
