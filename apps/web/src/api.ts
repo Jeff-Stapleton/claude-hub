@@ -93,11 +93,33 @@ export interface TriggerRunRecord {
   error?: string;
 }
 
-export interface ActivityEntry {
+export type MachineRunStatus = 'success' | 'failed' | 'interrupted' | 'skipped';
+
+/** Mirrors the server's MachineRunEvent (denormalized machine-run log). */
+export interface MachineRunEvent {
+  id: string;
+  workItemId: string;
+  workItemTitle: string;
+  projectId: string;
+  projectName: string;
+  machineKey: string;
+  machineName: string;
+  status: MachineRunStatus;
+  startedAt: string;
+  finishedAt: string;
+  summary?: string;
+  error?: string;
+}
+
+export interface TriggerActivityEntry {
   kind: 'trigger-run';
   run: TriggerRunRecord;
   triggerName: string;
 }
+
+export type ActivityEntry =
+  | TriggerActivityEntry
+  | { kind: 'machine-run'; event: MachineRunEvent };
 
 /**
  * Thin fetch wrapper. Throws on non-2xx with the body text so react-query

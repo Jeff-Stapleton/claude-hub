@@ -14,6 +14,7 @@ import {
   LEGACY_PASS_MARKERS,
   MACHINE_FAIL_MARKER,
   MACHINE_PASS_MARKER,
+  MACHINE_SUMMARY_INSTRUCTION,
   findMachineTemplate,
 } from './defaults.js';
 
@@ -33,6 +34,8 @@ export interface ExecuteStageResult {
   output: string;
   /** The rendered prompt, when an agent run happened. */
   prompt?: string;
+  /** Agent-reported MACHINE_SUMMARY, when present. Not stripped from output. */
+  summary?: string;
   error?: string;
   /** Provider session id to persist on the item, when an agent run happened. */
   session?: { provider: AgentProviderId; sessionId: string };
@@ -71,12 +74,13 @@ export async function executeMachine(
 
   const outputs: string[] = [];
   let prompt: string | undefined;
+  let summary: string | undefined;
   let session: ExecuteStageResult['session'];
   const tools = resolveToolAssignments(deps.store, machine, project);
 
   if (runAgent) {
     const rendered = render(template, buildContext(item, machine, machines));
-    prompt = buildProjectPreamble(project) + rendered;
+    prompt = buildProjectPreamble(project) + rendered + '\n\n' + MACHINE_SUMMARY_INSTRUCTION;
     const provider = machine.provider ?? deps.store.config().defaultProvider;
     const sessionId = item.sessions?.[provider];
 
@@ -100,10 +104,18 @@ export async function executeMachine(
 
     outputs.push(result.text);
     session = { provider, sessionId: result.sessionId };
+    summary = extractMachineSummary(result.text);
 
     const markerError = checkResultMarker(machine.resultCheck, result.text);
     if (markerError) {
-      return { ok: false, output: outputs.join('\n\n'), prompt, error: markerError, session };
+      return {
+        ok: false,
+        output: outputs.join('\n\n'),
+        prompt,
+        ...(summary !== undefined ? { summary } : {}),
+        error: markerError,
+        session,
+      };
     }
   }
 
@@ -122,6 +134,7 @@ export async function executeMachine(
         ok: false,
         output: outputs.join('\n\n'),
         ...(prompt !== undefined ? { prompt } : {}),
+        ...(summary !== undefined ? { summary } : {}),
         error: reason,
         ...(session ? { session } : {}),
       };
@@ -132,6 +145,7 @@ export async function executeMachine(
     ok: true,
     output: outputs.join('\n\n'),
     ...(prompt !== undefined ? { prompt } : {}),
+    ...(summary !== undefined ? { summary } : {}),
     ...(session ? { session } : {}),
   };
 }
@@ -328,6 +342,19 @@ export function checkResultMarker(
     if (!passed) return `machine did not report ${MACHINE_PASS_MARKER}`;
   }
   return undefined;
+}
+
+/** Cap for stored machine summaries (marker-parsed or fallback-derived). */
+export const MACHINE_SUMMARY_LIMIT = 280;
+
+/** First MACHINE_SUMMARY line in the agent text; undefined when absent. */
+export function extractMachineSummary(text: string): string | undefined {
+  const match = /^MACHINE_SUMMARY:\s*(.+)$/m.exec(text);
+  const summary = match?.[1]?.trim();
+  if (!summary) return undefined;
+  return summary.length > MACHINE_SUMMARY_LIMIT
+    ? summary.slice(0, MACHINE_SUMMARY_LIMIT - 1) + '…'
+    : summary;
 }
 
 export function truncateOutput(text: string): string {

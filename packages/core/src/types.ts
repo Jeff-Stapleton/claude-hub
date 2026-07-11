@@ -342,6 +342,8 @@ export interface StageResult {
   finishedAt?: ISODateString;
   /** Final agent text / command output, truncated. Full text lives in JSONL. */
   output?: string;
+  /** Agent-reported MACHINE_SUMMARY line (1-2 sentences), when present. */
+  summary?: string;
   error?: string;
   /** Consecutive passing checks so far. Machines with a monitor loop only. */
   checksPassed?: number;

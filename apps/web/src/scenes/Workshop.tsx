@@ -6,6 +6,7 @@ import {
   type MachineTemplateBody,
   type MonitorBody,
   type RepoInput,
+  type TriggerActivityEntry,
   type UpdateProjectBody,
 } from '../api.js';
 import { factoryLightState, type PipelineMachine, type ProjectMonitor, type UIState } from '../types.js';
@@ -230,9 +231,11 @@ export function Workshop({
   const { s: sceneScale, tx, ty } = sceneTransform(floorW, floorD);
 
   // Recent trigger runs per project, for each lane's head-machine screen.
+  // Machine-run entries stay out — lanes already show machine state live.
   const triggerProjectById = new Map(state.triggers.map((t) => [t.id, t.projectId]));
-  const activityByProject = new Map<string, typeof activity>();
+  const activityByProject = new Map<string, TriggerActivityEntry[]>();
   for (const entry of activity) {
+    if (entry.kind !== 'trigger-run') continue;
     const projectId = triggerProjectById.get(entry.run.triggerId);
     if (!projectId) continue;
     const entries = activityByProject.get(projectId) ?? [];

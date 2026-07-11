@@ -22,6 +22,8 @@ export interface StageRunRecord {
   finishedAt: ISODateString;
   prompt?: string;
   output?: string;
+  /** 1-2 sentence high-level summary (agent marker or truncated output). */
+  summary?: string;
   error?: string;
 }
 
@@ -38,6 +40,47 @@ export async function readWorkItemStageRuns(
   limit = 50,
 ): Promise<StageRunRecord[]> {
   return readJsonl<StageRunRecord>(paths.workItemHistoryFile(workItemId), limit);
+}
+
+export type MachineRunEventStatus = 'success' | 'failed' | 'interrupted' | 'skipped';
+
+/**
+ * One machine execution (or skip) on a work item, denormalized at write time
+ * so the activity feed needs no joins against live/archived state. Labels are
+ * as-of run time; renames and removals don't rewrite history. All events go
+ * to a single log file — the feed read is one tail, like trigger history.
+ */
+export interface MachineRunEvent {
+  id: string;
+  workItemId: string;
+  workItemTitle: string;
+  projectId: string;
+  projectName: string;
+  machineKey: string;
+  machineName: string;
+  status: MachineRunEventStatus;
+  startedAt: ISODateString;
+  finishedAt: ISODateString;
+  /** 1-2 sentence high-level description of what the machine did. */
+  summary?: string;
+  error?: string;
+}
+
+export async function appendMachineRunEvent(
+  paths: HubPaths,
+  event: MachineRunEvent,
+): Promise<void> {
+  const file = paths.machineRunLogFile();
+  await mkdir(dirname(file), { recursive: true });
+  await appendFile(file, JSON.stringify(event) + '\n', 'utf8');
+}
+
+/** Most recent N machine-run events, newest-first. */
+export async function readRecentMachineRunEvents(
+  paths: HubPaths,
+  limit = 100,
+): Promise<MachineRunEvent[]> {
+  return readJsonl<MachineRunEvent>(paths.machineRunLogFile(), limit);
 }
 
 /** Append a terminal work item to its project's archive. */

@@ -86,12 +86,23 @@ function Slot({
   const c = iso(x + w, wallY, z + h);
   const d = iso(x, wallY, z + h);
 
+  const status = card
+    ? card.kind === 'trigger-run'
+      ? card.run.status
+      : card.event.status
+    : undefined;
+  const label = card
+    ? card.kind === 'trigger-run'
+      ? card.triggerName
+      : card.event.machineName
+    : '';
+
   const band =
-    card?.run.status === 'error'
+    status === 'error' || status === 'failed'
       ? '#cf4040'
-      : card?.run.status === 'running'
+      : status === 'running' || status === 'interrupted'
       ? '#e8b04a'
-      : card?.run.status === 'success'
+      : status === 'success'
       ? '#5ec27a'
       : '#5a5a5a';
 
@@ -109,7 +120,7 @@ function Slot({
             fontFamily="monospace"
             fill="#e8d6b0"
           >
-            {shorten(card.triggerName, 14)}
+            {shorten(label, 14)}
           </text>
         </>
       ) : null}

@@ -77,6 +77,7 @@ scene scales down to keep everything visible at a glance.
 | Live items only (queued/running/waiting/monitoring/failed) | `~/.claude-hub/workItems.json` | Keeps the WS fat-patch payload small; failed items stay live so `retry` works |
 | Full per-stage records (prompts, untruncated outputs) | `~/.claude-hub/history/pipeline/items/<workItemId>.jsonl` | Append-only, cheap writes, same pattern as trigger history |
 | Terminal items (done/cancelled) | `~/.claude-hub/history/pipeline/projects/<projectId>.jsonl` | Archive; served via `GET .../work-items?includeDone=true` |
+| Machine-run events (status + 1-2 sentence summary, denormalized labels) | `~/.claude-hub/history/pipeline/machine-runs.jsonl` | Single-file tail powers the activity feed with no joins; labels are as-of run time |
 
 Outputs stored on the live `WorkItem` are truncated to 32 KB (`STAGE_OUTPUT_LIMIT` in
 `packages/pipeline/src/stages.ts`); the full text is always in the item's JSONL.

@@ -28,6 +28,19 @@ export const LEGACY_FAIL_MARKERS: readonly string[] = [
   'MONITOR_RESULT: FAIL',
 ];
 
+/** Line an agent machine ends its reply with, feeding the activity board. */
+export const MACHINE_SUMMARY_MARKER = 'MACHINE_SUMMARY:';
+
+/**
+ * Appended to every agent machine prompt in executeMachine — including
+ * custom templates, which therefore never need editing.
+ */
+export const MACHINE_SUMMARY_INSTRUCTION =
+  'At the end of your reply, include exactly one line starting with "MACHINE_SUMMARY: " ' +
+  'followed by a 1-2 sentence high-level summary of what you did and the outcome. ' +
+  'If you were also asked to end with a MACHINE_RESULT line, put the MACHINE_SUMMARY ' +
+  'line immediately before it.';
+
 const EPOCH = new Date(0).toISOString();
 
 /**

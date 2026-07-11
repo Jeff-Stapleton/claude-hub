@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import type { ActivityEntry } from '../../api.js';
+import type { TriggerActivityEntry } from '../../api.js';
 import type { PipelineConfig, Project, WorkItem } from '../../types.js';
 import { DepthSorted, iso, type SceneEntity } from '../iso.js';
 import { Belt } from './Belt.jsx';
@@ -53,7 +53,7 @@ export function ProjectLane({
   items: WorkItem[];
   /** Belt end == floor width; shared by every lane (the right wall). */
   beltX1: number;
-  triggerActivity: ActivityEntry[];
+  triggerActivity: TriggerActivityEntry[];
   selectedMachineKey: string | null;
   selectedItemId: string | null;
   removing: boolean;

@@ -1,4 +1,4 @@
-import type { ActivityEntry } from '../../api.js';
+import type { TriggerActivityEntry } from '../../api.js';
 import type { Project, TriggerRunStatus } from '../../types.js';
 import { iso, isoBoxPoints, poly } from '../iso.js';
 import { HEAD_D, HEAD_H, HEAD_W } from './layout.js';
@@ -28,7 +28,7 @@ export function LaneHeadMachine({
   y: number;
   variant: number;
   /** Recent trigger runs for this project (drives the screen color). */
-  activity: ActivityEntry[];
+  activity: TriggerActivityEntry[];
   anythingRunning: boolean;
   removing: boolean;
   onOpenIntake: () => void;

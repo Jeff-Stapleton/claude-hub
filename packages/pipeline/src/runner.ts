@@ -12,8 +12,13 @@ import {
   DEFAULT_MONITOR_MAX_CHECKS,
   effectivePipelineConfig,
 } from './defaults.js';
-import { appendStageRun, archiveWorkItem } from './history.js';
-import { executeMachine, truncateOutput } from './stages.js';
+import {
+  appendMachineRunEvent,
+  appendStageRun,
+  archiveWorkItem,
+  type MachineRunEventStatus,
+} from './history.js';
+import { MACHINE_SUMMARY_LIMIT, executeMachine, truncateOutput } from './stages.js';
 
 export interface EnqueueWorkItemInput {
   projectId: string;
@@ -181,12 +186,26 @@ export class PipelineRunner extends EventEmitter {
         ),
       );
       for (const it of interrupted) {
+        const startedAt = it.stages[it.currentStage]?.startedAt ?? it.updatedAt;
+        const finishedAt = new Date().toISOString();
         await appendStageRun(this.store.paths, {
           workItemId: it.id,
           stage: it.currentStage,
           status: 'interrupted',
-          startedAt: it.stages[it.currentStage]?.startedAt ?? it.updatedAt,
-          finishedAt: new Date().toISOString(),
+          startedAt,
+          finishedAt,
+          error: 'interrupted by server restart',
+        });
+        const machineName = effectivePipelineConfig(this.store, it.projectId).machines.find(
+          (m) => m.key === it.currentStage,
+        )?.name;
+        await this.logMachineRun({
+          item: it,
+          machineKey: it.currentStage,
+          ...(machineName !== undefined ? { machineName } : {}),
+          status: 'interrupted',
+          startedAt,
+          finishedAt,
           error: 'interrupted by server restart',
         });
       }
@@ -276,6 +295,7 @@ export class PipelineRunner extends EventEmitter {
     let output = '';
     let error: string | undefined;
     let prompt: string | undefined;
+    let summary: string | undefined;
     let session: Awaited<ReturnType<typeof executeMachine>>['session'];
 
     if (!project) {
@@ -292,17 +312,30 @@ export class PipelineRunner extends EventEmitter {
       output = res.output;
       error = res.error;
       prompt = res.prompt;
+      summary = res.summary ?? fallbackSummary(res.output);
       session = res.session;
     }
 
+    const finishedAt = new Date().toISOString();
     await appendStageRun(this.store.paths, {
       workItemId: item.id,
       stage: machineKey,
       status: ok ? 'success' : 'failed',
       startedAt,
-      finishedAt: new Date().toISOString(),
+      finishedAt,
       ...(prompt !== undefined ? { prompt } : {}),
       ...(output ? { output } : {}),
+      ...(summary !== undefined ? { summary } : {}),
+      ...(error !== undefined ? { error } : {}),
+    });
+    await this.logMachineRun({
+      item,
+      machineKey,
+      machineName: machine.name,
+      status: ok ? 'success' : 'failed',
+      startedAt,
+      finishedAt,
+      ...(summary !== undefined ? { summary } : {}),
       ...(error !== undefined ? { error } : {}),
     });
 
@@ -316,6 +349,7 @@ export class PipelineRunner extends EventEmitter {
             status: 'success',
             checksPassed: passed,
             output: truncateOutput(output),
+            ...(summary !== undefined ? { summary } : {}),
             finishedAt: new Date().toISOString(),
           };
           if (session) it.sessions = { ...it.sessions, [session.provider]: session.sessionId };
@@ -344,6 +378,7 @@ export class PipelineRunner extends EventEmitter {
             status: it.stages[machineKey]?.status ?? 'running',
             checksPassed: passed,
             output: truncateOutput(output),
+            ...(summary !== undefined ? { summary } : {}),
           };
           if (session) it.sessions = { ...it.sessions, [session.provider]: session.sessionId };
         });
@@ -357,6 +392,7 @@ export class PipelineRunner extends EventEmitter {
         ...it.stages[machineKey],
         status: 'failed',
         output: truncateOutput(output),
+        ...(summary !== undefined ? { summary } : {}),
         ...(error !== undefined ? { error } : {}),
         finishedAt: new Date().toISOString(),
       };
@@ -433,7 +469,20 @@ export class PipelineRunner extends EventEmitter {
       const current = this.store.workItems().find((it) => it.id === id);
       if (!current) return; // cancelled underneath us
 
-      if (current.stages[machine.key]?.status === 'success') continue; // already ran
+      if (current.stages[machine.key]?.status === 'success') {
+        // Already ran on a previous pass (line edit/reorder resume).
+        const now = new Date().toISOString();
+        await this.logMachineRun({
+          item: current,
+          machineKey: machine.key,
+          machineName: machine.name,
+          status: 'skipped',
+          startedAt: now,
+          finishedAt: now,
+          summary: 'Skipped — already succeeded on a previous pass.',
+        });
+        continue;
+      }
 
       if (machine.gate === 'approval' && !(current.approvedStages ?? []).includes(machine.key)) {
         await this.updateItem(id, (it) => {
@@ -468,6 +517,7 @@ export class PipelineRunner extends EventEmitter {
       let ok = false;
       let output = '';
       let prompt: string | undefined;
+      let summary: string | undefined;
       let error: string | undefined;
       let session: Awaited<ReturnType<typeof executeMachine>>['session'];
 
@@ -489,6 +539,7 @@ export class PipelineRunner extends EventEmitter {
           ok = res.ok;
           output = res.output;
           prompt = res.prompt;
+          summary = res.summary ?? fallbackSummary(res.output);
           error = res.error;
           session = res.session;
         } catch (err) {
@@ -496,14 +547,26 @@ export class PipelineRunner extends EventEmitter {
         }
       }
 
+      const finishedAt = new Date().toISOString();
       await appendStageRun(this.store.paths, {
         workItemId: id,
         stage: machine.key,
         status: ok ? 'success' : 'failed',
         startedAt,
-        finishedAt: new Date().toISOString(),
+        finishedAt,
         ...(prompt !== undefined ? { prompt } : {}),
         ...(output ? { output } : {}),
+        ...(summary !== undefined ? { summary } : {}),
+        ...(error !== undefined ? { error } : {}),
+      });
+      await this.logMachineRun({
+        item: runningItem,
+        machineKey: machine.key,
+        machineName: machine.name,
+        status: ok ? 'success' : 'failed',
+        startedAt,
+        finishedAt,
+        ...(summary !== undefined ? { summary } : {}),
         ...(error !== undefined ? { error } : {}),
       });
 
@@ -513,6 +576,7 @@ export class PipelineRunner extends EventEmitter {
           startedAt,
           finishedAt: new Date().toISOString(),
           output: truncateOutput(output),
+          ...(summary !== undefined ? { summary } : {}),
           ...(error !== undefined ? { error } : {}),
         };
         if (session) it.sessions = { ...it.sessions, [session.provider]: session.sessionId };
@@ -536,6 +600,41 @@ export class PipelineRunner extends EventEmitter {
       await archiveWorkItem(this.store.paths, done);
       await this.store.update('workItems', (items) => items.filter((it) => it.id !== id));
       console.log(`[pipeline] "${done.title}" (${id.slice(0, 8)}) completed`);
+    }
+  }
+
+  /**
+   * Append one denormalized event to the activity-feed log. Best-effort: a
+   * feed-log failure must never fail the machine run it describes.
+   */
+  private async logMachineRun(args: {
+    item: WorkItem;
+    machineKey: string;
+    machineName?: string;
+    status: MachineRunEventStatus;
+    startedAt: string;
+    finishedAt: string;
+    summary?: string;
+    error?: string;
+  }): Promise<void> {
+    try {
+      const project = this.store.projects().find((p) => p.id === args.item.projectId);
+      await appendMachineRunEvent(this.store.paths, {
+        id: randomUUID(),
+        workItemId: args.item.id,
+        workItemTitle: args.item.title,
+        projectId: args.item.projectId,
+        projectName: project?.name ?? args.item.projectId,
+        machineKey: args.machineKey,
+        machineName: args.machineName ?? args.machineKey,
+        status: args.status,
+        startedAt: args.startedAt,
+        finishedAt: args.finishedAt,
+        ...(args.summary !== undefined ? { summary: args.summary } : {}),
+        ...(args.error !== undefined ? { error: args.error } : {}),
+      });
+    } catch (err) {
+      console.warn(`[pipeline] failed to log machine-run event for ${args.item.id}:`, err);
     }
   }
 
@@ -566,6 +665,15 @@ export class PipelineRunner extends EventEmitter {
     if (updated) this.emit('itemChanged', updated);
     return updated;
   }
+}
+
+/** Feed summary when the agent omitted the MACHINE_SUMMARY marker. */
+function fallbackSummary(output: string): string | undefined {
+  const flat = output.replace(/\s+/g, ' ').trim();
+  if (!flat) return undefined;
+  return flat.length > MACHINE_SUMMARY_LIMIT
+    ? flat.slice(0, MACHINE_SUMMARY_LIMIT - 1) + '…'
+    : flat;
 }
 
 function deriveTitle(request: string): string {

@@ -6,6 +6,8 @@ export {
   LEGACY_PASS_MARKERS,
   MACHINE_FAIL_MARKER,
   MACHINE_PASS_MARKER,
+  MACHINE_SUMMARY_INSTRUCTION,
+  MACHINE_SUMMARY_MARKER,
   defaultPipelineConfig,
   effectivePipelineConfig,
   findMachineTemplate,
@@ -14,16 +16,22 @@ export {
 } from './defaults.js';
 export { runCommands, type RunCommandsResult } from './commands.js';
 export {
+  appendMachineRunEvent,
   appendStageRun,
   archiveWorkItem,
   readArchivedWorkItems,
+  readRecentMachineRunEvents,
   readWorkItemStageRuns,
+  type MachineRunEvent,
+  type MachineRunEventStatus,
   type StageRunRecord,
 } from './history.js';
 export {
+  MACHINE_SUMMARY_LIMIT,
   STAGE_OUTPUT_LIMIT,
   checkResultMarker,
   executeMachine,
+  extractMachineSummary,
   resolveToolAssignments,
   truncateOutput,
   type ExecuteStageDeps,

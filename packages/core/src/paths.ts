@@ -71,6 +71,11 @@ export class HubPaths {
     return join(this.pipelineArchiveDir(), `${projectId}.jsonl`);
   }
 
+  /** Denormalized machine-run events powering the activity feed. */
+  machineRunLogFile(): string {
+    return join(this.historyDir(), 'pipeline', 'machine-runs.jsonl');
+  }
+
   orchestratorWorkdir(): string {
     return join(this.root, 'orchestrator');
   }

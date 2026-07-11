@@ -291,6 +291,8 @@ export interface StageResult {
   startedAt?: string;
   finishedAt?: string;
   output?: string;
+  /** Agent-reported MACHINE_SUMMARY line (1-2 sentences), when present. */
+  summary?: string;
   error?: string;
   checksPassed?: number;
 }

@@ -13,9 +13,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BUILTIN_MACHINE_TEMPLATES } from '../src/defaults.js';
-import { readArchivedWorkItems, readWorkItemStageRuns } from '../src/history.js';
+import {
+  readArchivedWorkItems,
+  readRecentMachineRunEvents,
+  readWorkItemStageRuns,
+} from '../src/history.js';
 import { PipelineRunner, WorkItemStateError } from '../src/runner.js';
-import { resolveTransportSecrets } from '../src/stages.js';
+import { extractMachineSummary, resolveTransportSecrets } from '../src/stages.js';
 
 const mockRun = vi.fn<AgentRunner['runProjectSession']>();
 const agentRunner: AgentRunner = { runProjectSession: mockRun };
@@ -425,6 +429,185 @@ describe('PipelineRunner', () => {
   });
 });
 
+describe('machine-run activity log', () => {
+  let root: string;
+  let store: Store;
+  let runner: PipelineRunner;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'pipeline-act-'));
+    store = new Store(new HubPaths(root));
+    await store.load();
+    await store.update('projects', [project]);
+    mockRun.mockReset();
+    runner = new PipelineRunner(store, agentRunner);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
+  });
+
+  it('logs one denormalized event per machine run, newest-first', async () => {
+    await store.update('pipelines', [openPipeline()]);
+    mockRun.mockResolvedValue(okResult());
+
+    const item = await runner.enqueue({ projectId: project.id, request: 'add a button', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    const events = await readRecentMachineRunEvents(store.paths);
+    expect(events).toHaveLength(4);
+    // Newest-first: deploy ran last.
+    expect(events.map((e) => e.machineKey)).toEqual(['deploy', 'test', 'code', 'spec']);
+    expect(events.every((e) => e.status === 'success')).toBe(true);
+    const spec = events[3]!;
+    expect(spec.workItemId).toBe(item.id);
+    expect(spec.workItemTitle).toBe(item.title);
+    expect(spec.projectId).toBe(project.id);
+    expect(spec.projectName).toBe(project.name);
+    expect(spec.machineName).toBe('Spec');
+  });
+
+  it('carries the MACHINE_SUMMARY marker into the event and stage result, without stripping output', async () => {
+    await store.update('pipelines', [linePipeline([builtinMachine('spec')])]);
+    mockRun.mockResolvedValue(okResult('I planned it.\nMACHINE_SUMMARY: Wrote the plan.'));
+
+    await runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    const events = await readRecentMachineRunEvents(store.paths);
+    expect(events[0]?.summary).toBe('Wrote the plan.');
+    const archived = await readArchivedWorkItems(store.paths, project.id);
+    expect(archived[0]?.stages.spec?.summary).toBe('Wrote the plan.');
+    // The marker line stays verbatim in the output (template context/history).
+    expect(archived[0]?.stages.spec?.output).toContain('MACHINE_SUMMARY: Wrote the plan.');
+  });
+
+  it('falls back to truncated output when the marker is missing', async () => {
+    await store.update('pipelines', [linePipeline([builtinMachine('spec')])]);
+    mockRun.mockResolvedValue(okResult('did some\nmultiline work'));
+
+    await runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    const events = await readRecentMachineRunEvents(store.paths);
+    expect(events[0]?.summary).toBe('did some multiline work');
+  });
+
+  it('logs a failed event with the error when a machine errors', async () => {
+    await store.update('pipelines', [linePipeline([builtinMachine('spec'), builtinMachine('code')])]);
+    mockRun
+      .mockResolvedValueOnce(okResult('plan'))
+      .mockResolvedValueOnce({ ok: false, provider: 'claude', error: 'boom' });
+
+    const item = await runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' });
+    await until(() => store.workItems().find((it) => it.id === item.id)?.status === 'failed');
+
+    const events = await readRecentMachineRunEvents(store.paths);
+    expect(events[0]?.machineKey).toBe('code');
+    expect(events[0]?.status).toBe('failed');
+    expect(events[0]?.error).toBe('boom');
+  });
+
+  it('appends the summary instruction to every agent prompt, including custom templates', async () => {
+    await store.update('pipelines', [
+      linePipeline([
+        builtinMachine('spec'),
+        { key: 'custom', name: 'Custom', gate: 'auto', promptTemplate: 'Do {{request}}' },
+      ]),
+    ]);
+    mockRun.mockResolvedValue(okResult());
+
+    await runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' });
+    await until(() => store.workItems().length === 0);
+
+    expect(mockRun).toHaveBeenCalledTimes(2);
+    for (const call of mockRun.mock.calls) {
+      expect(call[0].prompt).toContain('MACHINE_SUMMARY: ');
+    }
+  });
+
+  it('logs a skipped event when a machine already succeeded on a previous pass', async () => {
+    await store.update('pipelines', [linePipeline([builtinMachine('spec'), builtinMachine('code')])]);
+    // An item re-queued at a machine that already succeeded (line reorder).
+    const requeued: WorkItem = {
+      id: 'wi-requeued',
+      projectId: project.id,
+      title: 'requeued',
+      request: 'x',
+      source: 'manual',
+      status: 'queued',
+      currentStage: 'spec',
+      stages: { spec: { status: 'success', output: 'the plan' }, code: { status: 'pending' } },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await store.update('workItems', [requeued]);
+    mockRun.mockResolvedValue(okResult());
+
+    await runner.recover();
+    await until(() => store.workItems().length === 0);
+
+    const events = await readRecentMachineRunEvents(store.paths);
+    const skipped = events.find((e) => e.status === 'skipped');
+    expect(skipped?.machineKey).toBe('spec');
+    expect(skipped?.summary).toMatch(/already succeeded/);
+    // code actually ran.
+    expect(events.some((e) => e.machineKey === 'code' && e.status === 'success')).toBe(true);
+    expect(mockRun).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs an interrupted event for items recovered mid-machine', async () => {
+    await store.update('pipelines', [linePipeline([builtinMachine('spec')])]);
+    const stranded: WorkItem = {
+      id: 'wi-stranded',
+      projectId: project.id,
+      title: 'stranded',
+      request: 'x',
+      source: 'manual',
+      status: 'running',
+      currentStage: 'spec',
+      stages: { spec: { status: 'running' } },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await store.update('workItems', [stranded]);
+    mockRun.mockResolvedValue(okResult());
+
+    await runner.recover();
+    await until(() => store.workItems().length === 0);
+
+    const events = await readRecentMachineRunEvents(store.paths);
+    const interrupted = events.find((e) => e.status === 'interrupted');
+    expect(interrupted?.machineKey).toBe('spec');
+    expect(interrupted?.machineName).toBe('Spec');
+    expect(interrupted?.error).toMatch(/server restart/);
+  });
+});
+
+describe('extractMachineSummary', () => {
+  it('extracts the marker line from multiline text, before a MACHINE_RESULT line', () => {
+    const text = 'Ran the suite.\nAll green.\nMACHINE_SUMMARY: Ran 42 tests, all passing.\nMACHINE_RESULT: PASS';
+    expect(extractMachineSummary(text)).toBe('Ran 42 tests, all passing.');
+  });
+
+  it('returns undefined when the marker is absent or empty', () => {
+    expect(extractMachineSummary('no marker here')).toBeUndefined();
+    expect(extractMachineSummary('MACHINE_SUMMARY:   ')).toBeUndefined();
+  });
+
+  it('takes the first marker line and trims whitespace', () => {
+    const text = 'MACHINE_SUMMARY:  first thing  \nMACHINE_SUMMARY: second thing';
+    expect(extractMachineSummary(text)).toBe('first thing');
+  });
+
+  it('truncates over-limit summaries with an ellipsis', () => {
+    const long = 'x'.repeat(400);
+    const summary = extractMachineSummary(`MACHINE_SUMMARY: ${long}`);
+    expect(summary).toHaveLength(280);
+    expect(summary?.endsWith('…')).toBe(true);
+  });
+});
+
 describe('PipelineRunner.runMonitorCheck', () => {
   let root: string;
   let store: Store;
@@ -490,6 +673,10 @@ describe('PipelineRunner.runMonitorCheck', () => {
     const archived = await readArchivedWorkItems(store.paths, project.id);
     expect(archived[0]?.status).toBe('done');
     expect(archived[0]?.stages.monitor?.status).toBe('success');
+
+    // Each check is a real machine execution: one activity event apiece.
+    const events = await readRecentMachineRunEvents(store.paths);
+    expect(events.filter((e) => e.machineKey === 'monitor' && e.status === 'success')).toHaveLength(2);
   });
 
   it('accepts the legacy MONITOR_RESULT markers from migrated prompts', async () => {
