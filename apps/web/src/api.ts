@@ -5,6 +5,8 @@ import type {
   McpTransportInput,
   PipelineConfig,
   Project,
+  ProjectMonitor,
+  ProjectMonitorCheck,
   ProjectRepo,
   RedactedGitCredential,
   RedactedVaultEntry,
@@ -43,6 +45,19 @@ export type MachineTemplateBody = Omit<
   MachineTemplate,
   'id' | 'source' | 'createdAt' | 'updatedAt'
 >;
+
+/** New checks omit id; the server assigns one so status keys stay stable. */
+export type MonitorCheckInput = ProjectMonitorCheck extends infer C
+  ? C extends { id: string }
+    ? Omit<C, 'id'> & { id?: string }
+    : never
+  : never;
+
+export interface MonitorBody {
+  enabled: boolean;
+  fileDefectOnFailure: boolean;
+  checks: MonitorCheckInput[];
+}
 
 export interface PathInspection {
   exists: boolean;
@@ -214,6 +229,18 @@ export const api = {
   deleteMachineTemplate: (id: string) =>
     req<{ ok: true }>(`/api/machine-templates/${encodeURIComponent(id)}`, {
       method: 'DELETE',
+    }),
+  getMonitor: (projectId: string) =>
+    req<ProjectMonitor>(`/api/projects/${encodeURIComponent(projectId)}/monitor`),
+  saveMonitor: (projectId: string, body: MonitorBody) =>
+    req<ProjectMonitor>(`/api/projects/${encodeURIComponent(projectId)}/monitor`, {
+      method: 'PUT',
+      body: JSON.stringify(body),
+    }),
+  runMonitorNow: (projectId: string) =>
+    req<{ ok: true }>(`/api/projects/${encodeURIComponent(projectId)}/monitor/run`, {
+      method: 'POST',
+      body: '{}',
     }),
   createWorkItem: (projectId: string, body: { request: string; title?: string }) =>
     req<WorkItem>(`/api/projects/${encodeURIComponent(projectId)}/work-items`, {

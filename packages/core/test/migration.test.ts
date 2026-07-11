@@ -77,6 +77,21 @@ describe('store schema migration v2 -> v3', () => {
     expect(store.vault()).toEqual([]);
   });
 
+  it('loads a v7 store (no monitors file) with empty monitors', async () => {
+    const paths = new HubPaths(root);
+    await writeFile(
+      paths.file('config'),
+      JSON.stringify({ schemaVersion: 7, httpPort: 7878 }),
+      'utf8',
+    );
+
+    const store = new Store(paths);
+    await store.load();
+
+    expect(store.config().schemaVersion).toBe(STORE_SCHEMA_VERSION);
+    expect(store.monitors()).toEqual([]);
+  });
+
   it('still refuses to load a future schema version', async () => {
     const paths = new HubPaths(root);
     await writeFile(

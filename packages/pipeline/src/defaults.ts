@@ -144,6 +144,19 @@ export function listMachineTemplates(store: Store): MachineTemplate[] {
   return [...BUILTIN_MACHINE_TEMPLATES, ...store.machineTemplates()];
 }
 
+/**
+ * Built-ins retired from the add-machine gallery but kept resolvable so
+ * already-installed machines keep their prompt fallback and pass templateId
+ * validation. The classic Monitor station is superseded by project-level
+ * monitors (the factory light over the SHIPPED door).
+ */
+const HIDDEN_BUILTIN_TEMPLATE_IDS: ReadonlySet<string> = new Set([builtinTemplateId('monitor')]);
+
+/** Templates offered in the add-machine gallery: built-ins minus retired ones, plus customs. */
+export function listInstallableMachineTemplates(store: Store): MachineTemplate[] {
+  return listMachineTemplates(store).filter((t) => !HIDDEN_BUILTIN_TEMPLATE_IDS.has(t.id));
+}
+
 /** Template lookup for the instance promptTemplate fallback chain. */
 export function findMachineTemplate(
   store: Store,

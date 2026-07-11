@@ -35,11 +35,14 @@ describe('machine template routes', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('GET lists built-ins plus stored customs', async () => {
+  it('GET lists installable built-ins plus stored customs (monitor builtin retired)', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/machine-templates' });
     expect(res.statusCode).toBe(200);
     const body = JSON.parse(res.body) as { id: string; source: string }[];
-    expect(body).toHaveLength(BUILTIN_MACHINE_TEMPLATES.length);
+    // The monitor builtin is hidden from the gallery — project-level
+    // monitors (the SHIPPED-door factory light) replaced it.
+    expect(body).toHaveLength(BUILTIN_MACHINE_TEMPLATES.length - 1);
+    expect(body.some((t) => t.id === 'builtin-monitor')).toBe(false);
     expect(body.every((t) => t.source === 'builtin')).toBe(true);
   });
 

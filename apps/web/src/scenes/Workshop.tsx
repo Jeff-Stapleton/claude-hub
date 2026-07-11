@@ -4,10 +4,11 @@ import {
   api,
   type CreateProjectBody,
   type MachineTemplateBody,
+  type MonitorBody,
   type RepoInput,
   type UpdateProjectBody,
 } from '../api.js';
-import type { PipelineMachine, UIState } from '../types.js';
+import { factoryLightState, type PipelineMachine, type ProjectMonitor, type UIState } from '../types.js';
 import { DepthSorted, iso, poly, WALL_H, type SceneEntity } from './iso.js';
 import type { SceneId } from './useSceneRouter.js';
 import { AddMachinePanel } from './workshop/AddMachinePanel.jsx';
@@ -15,6 +16,7 @@ import { ChannelsRadio } from './workshop/ChannelsRadio.jsx';
 import { CronClockWall } from './workshop/CronClockWall.jsx';
 import { DebugOverlay } from './workshop/DebugOverlay.jsx';
 import { ExitChute } from './workshop/ExitChute.jsx';
+import { FactoryLight } from './workshop/FactoryLight.jsx';
 import { GhostLane } from './workshop/GhostLane.jsx';
 import {
   BELT_LOCAL_Y,
@@ -33,6 +35,7 @@ import {
   workshopFloorDepth,
 } from './workshop/layout.js';
 import { MachineConfigPanel } from './workshop/MachineConfigPanel.jsx';
+import { MonitorPanel } from './workshop/MonitorPanel.jsx';
 import { NewProjectWizard } from './workshop/NewProjectWizard.jsx';
 import { OrchestratorConsole } from './workshop/OrchestratorConsole.jsx';
 import { ProjectLane } from './workshop/ProjectLane.jsx';
@@ -68,6 +71,7 @@ type WorkshopSelection =
   | { kind: 'vault' }
   | { kind: 'newProject' }
   | { kind: 'projectSettings'; projectId: string }
+  | { kind: 'monitor'; projectId: string }
   | null;
 
 const EMPTY_TOOLBOX = { skills: [], mcpServers: [] };
@@ -169,6 +173,18 @@ export function Workshop({
       }
     },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
+
+  const monitorMutation = useMutation({
+    mutationFn: ({ projectId, body }: { projectId: string; body: MonitorBody }) =>
+      api.saveMonitor(projectId, body),
+    // Close on save: the server assigns check ids, so a kept-open panel
+    // would hold id-less drafts that re-mint ids (and drop status) on the
+    // next save. Reopening shows the saved config with live status.
+    onSuccess: () => {
+      setSelection(null);
+      void qc.invalidateQueries({ queryKey: ['state'] });
+    },
   });
 
   const vaultMutation = useMutation({
@@ -373,7 +389,18 @@ export function Workshop({
           onOpen={() => navigate('channels')}
         />
         {projects.map((project, laneIndex) => (
-          <ExitChute key={project.id} wallX={floorW} beltY={laneY(laneIndex) + BELT_LOCAL_Y} />
+          <g key={project.id}>
+            <ExitChute wallX={floorW} beltY={laneY(laneIndex) + BELT_LOCAL_Y} />
+            <FactoryLight
+              wallX={floorW}
+              beltY={laneY(laneIndex) + BELT_LOCAL_Y}
+              projectName={project.name}
+              light={factoryLightState(
+                state.monitors?.find((m) => m.projectId === project.id),
+              )}
+              onOpen={() => toggle({ kind: 'monitor', projectId: project.id })}
+            />
+          </g>
         ))}
 
         {/* Floor-standing objects in enforced back-to-front paint order. */}
@@ -501,6 +528,18 @@ export function Workshop({
           onClose={() => setSelection(null)}
         />
       ) : null}
+      {selected?.kind === 'monitor' ? (
+        <MonitorPanel
+          key={selected.projectId}
+          projectLabel={labelFor(selected.projectId)}
+          monitor={selected.monitor}
+          isPending={monitorMutation.isPending}
+          error={monitorMutation.error}
+          onSave={(body) => monitorMutation.mutate({ projectId: selected.projectId, body })}
+          onRunNow={() => void api.runMonitorNow(selected.projectId)}
+          onClose={() => setSelection(null)}
+        />
+      ) : null}
       {selected?.kind === 'projectSettings' && selected.project ? (
         <ProjectSettingsPanel
           key={selected.projectId}
@@ -563,6 +602,7 @@ type ValidatedSelection =
   | { kind: 'vault' }
   | { kind: 'newProject' }
   | { kind: 'projectSettings'; projectId: string; project: UIState['projects'][number] }
+  | { kind: 'monitor'; projectId: string; monitor: ProjectMonitor | undefined }
   | null;
 
 function validateSelection(
@@ -587,6 +627,13 @@ function validateSelection(
     return project ? { ...selection, project } : null;
   }
   if (!state.projects.some((p) => p.id === selection.projectId)) return null;
+  if (selection.kind === 'monitor') {
+    // An unconfigured project has no monitor entry yet — the panel opens blank.
+    return {
+      ...selection,
+      monitor: state.monitors?.find((m) => m.projectId === selection.projectId),
+    };
+  }
   if (selection.kind === 'machine') {
     const machine = configFor(selection.projectId).machines.find(
       (m) => m.key === selection.machineKey,

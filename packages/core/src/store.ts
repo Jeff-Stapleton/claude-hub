@@ -18,6 +18,7 @@ import {
   type PipelineConfig,
   type PipelineMachine,
   type Project,
+  type ProjectMonitor,
   type StageGate,
   type StoreEntityKey,
   type StoreSnapshot,
@@ -76,6 +77,7 @@ function emptySnapshot(): StoreSnapshot {
     machineTemplates: [],
     gitCredentials: [],
     vault: [],
+    monitors: [],
   };
 }
 
@@ -173,6 +175,7 @@ export class Store extends EventEmitter {
       fresh.gitCredentials,
     );
     fresh.vault = await readJsonOrDefault(this.paths.file('vault'), fresh.vault);
+    fresh.monitors = await readJsonOrDefault(this.paths.file('monitors'), fresh.monitors);
 
     this.snapshot = fresh;
     this.loaded = true;
@@ -227,6 +230,10 @@ export class Store extends EventEmitter {
 
   vault(): VaultEntry[] {
     return this.get().vault;
+  }
+
+  monitors(): ProjectMonitor[] {
+    return this.get().monitors;
   }
 
   // -- writes ---------------------------------------------------------------
@@ -466,10 +473,10 @@ function mergeConfigDefaults(persisted: Partial<AppConfig>): AppConfig {
   const config: AppConfig = {
     ...DEFAULT_CONFIG,
     ...persisted,
-    // v1 -> v2 -> v3 -> v4 and v5 -> v6 are purely additive (new files
-    // default to [], new optional fields back-filled here), so older stores
-    // coerce forward. v4 -> v5 additionally reshapes projects (handled by
-    // migrateLegacyProjects during load); v6 -> v7 reshapes pipelines and
+    // v1 -> v2 -> v3 -> v4, v5 -> v6, and v7 -> v8 are purely additive (new
+    // files default to [], new optional fields back-filled here), so older
+    // stores coerce forward. v4 -> v5 additionally reshapes projects (handled
+    // by migrateLegacyProjects during load); v6 -> v7 reshapes pipelines and
     // work items (migrateLegacyPipelines / migrateLegacyWorkItems).
     schemaVersion:
       persisted.schemaVersion === undefined ||
@@ -478,7 +485,8 @@ function mergeConfigDefaults(persisted: Partial<AppConfig>): AppConfig {
       persisted.schemaVersion === 3 ||
       persisted.schemaVersion === 4 ||
       persisted.schemaVersion === 5 ||
-      persisted.schemaVersion === 6
+      persisted.schemaVersion === 6 ||
+      persisted.schemaVersion === 7
         ? STORE_SCHEMA_VERSION
         : persisted.schemaVersion,
     defaultProvider: persisted.defaultProvider ?? DEFAULT_CONFIG.defaultProvider,

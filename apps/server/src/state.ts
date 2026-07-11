@@ -7,11 +7,12 @@ import type {
   MachineTemplate,
   PipelineConfig,
   Project,
+  ProjectMonitor,
   Store,
   StoreSnapshot,
   WorkItem,
 } from '@claude-hub/core';
-import { effectivePipelineConfig, listMachineTemplates } from '@claude-hub/pipeline';
+import { effectivePipelineConfig, listInstallableMachineTemplates } from '@claude-hub/pipeline';
 import { redactCredential, type RedactedGitCredential } from './routes/git.js';
 import { redactToolbox, type RedactedToolbox } from './routes/toolbox.js';
 import { redactVault, type RedactedVaultEntry } from './vault.js';
@@ -41,6 +42,8 @@ export interface UIState {
   gitCredentials: RedactedGitCredential[];
   /** Vault keys with values stripped to set/unset; requiredBy is derived. */
   vault: RedactedVaultEntry[];
+  /** Project health monitors (config + latest check status), existing projects only. */
+  monitors: ProjectMonitor[];
 }
 
 export type RedactedWorkItem = Omit<WorkItem, 'sessions'>;
@@ -136,8 +139,11 @@ export async function buildUIState(
     pipelines,
     workItems,
     toolbox: redactToolbox(snapshot.toolbox),
-    machineTemplates: listMachineTemplates(store),
+    machineTemplates: listInstallableMachineTemplates(store),
     gitCredentials: snapshot.gitCredentials.map(redactCredential),
     vault: redactVault(snapshot.vault, snapshot.toolbox, snapshot.machineTemplates),
+    monitors: snapshot.monitors.filter((m) =>
+      snapshot.projects.some((p) => p.id === m.projectId),
+    ),
   };
 }

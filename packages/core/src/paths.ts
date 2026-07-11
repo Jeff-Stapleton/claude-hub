@@ -27,7 +27,8 @@ export class HubPaths {
       | 'toolbox'
       | 'machineTemplates'
       | 'gitCredentials'
-      | 'vault',
+      | 'vault'
+      | 'monitors',
   ): string {
     return join(this.root, `${name}.json`);
   }

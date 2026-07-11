@@ -313,6 +313,82 @@ export interface WorkItem {
   finishedAt?: string;
 }
 
+// ---------------------------------------------------------------------------
+// Project monitors (continuous post-ship health checks)
+// ---------------------------------------------------------------------------
+
+export type ProjectMonitorCheckType = 'http' | 'command' | 'agent';
+
+interface ProjectMonitorCheckBase {
+  /** Stable identity assigned by the server; status is keyed by it. */
+  id: string;
+  name: string;
+  intervalMinutes: number;
+  timeoutMs?: number;
+}
+
+export interface HttpMonitorCheck extends ProjectMonitorCheckBase {
+  type: 'http';
+  url: string;
+  expectedStatus?: number;
+}
+
+export interface CommandMonitorCheck extends ProjectMonitorCheckBase {
+  type: 'command';
+  command: string;
+}
+
+export interface AgentMonitorCheck extends ProjectMonitorCheckBase {
+  type: 'agent';
+  prompt: string;
+  provider?: AgentProviderId;
+}
+
+export type ProjectMonitorCheck = HttpMonitorCheck | CommandMonitorCheck | AgentMonitorCheck;
+
+export interface MonitorCheckStatus {
+  lastStatus: 'pass' | 'fail';
+  lastCheckedAt: string;
+  lastDurationMs?: number;
+  lastOutput?: string;
+  lastError?: string;
+  consecutiveFails: number;
+}
+
+export interface ProjectMonitor {
+  projectId: string;
+  enabled: boolean;
+  checks: ProjectMonitorCheck[];
+  fileDefectOnFailure: boolean;
+  status: {
+    checks: Record<string, MonitorCheckStatus>;
+    outageOpen: boolean;
+  };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type ProjectMonitorHealth = 'healthy' | 'down' | 'unknown';
+
+/** The factory light over a SHIPPED door: ghost until a monitor is live. */
+export type FactoryLightState = 'ghost' | ProjectMonitorHealth;
+
+/** Mirror of the server's aggregate-health rule (web doesn't import core). */
+export function projectMonitorHealth(
+  monitor: Pick<ProjectMonitor, 'checks' | 'status'>,
+): ProjectMonitorHealth {
+  if (monitor.checks.length === 0) return 'unknown';
+  const results = monitor.checks.map((c) => monitor.status.checks[c.id]);
+  if (results.some((r) => r?.lastStatus === 'fail')) return 'down';
+  if (results.every((r) => r?.lastStatus === 'pass')) return 'healthy';
+  return 'unknown';
+}
+
+export function factoryLightState(monitor: ProjectMonitor | undefined): FactoryLightState {
+  if (!monitor || !monitor.enabled || monitor.checks.length === 0) return 'ghost';
+  return projectMonitorHealth(monitor);
+}
+
 export interface UIState {
   config: AppConfig;
   projects: Project[];
@@ -330,4 +406,6 @@ export interface UIState {
   gitCredentials?: RedactedGitCredential[];
   /** Optional so payloads from a pre-vault server still render. */
   vault?: RedactedVaultEntry[];
+  /** Optional so payloads from a pre-monitor server still render. */
+  monitors?: ProjectMonitor[];
 }

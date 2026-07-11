@@ -7,7 +7,7 @@ import {
   writeCursorOrchestratorMcpConfig,
   writeOrchestratorMcpConfig,
 } from '@claude-hub/orchestrator';
-import { MonitorScheduler, PipelineRunner } from '@claude-hub/pipeline';
+import { MonitorScheduler, PipelineRunner, ProjectMonitorScheduler } from '@claude-hub/pipeline';
 import { CronScheduler, TriggerRunner } from '@claude-hub/triggers';
 import fastifyStatic from '@fastify/static';
 import Fastify from 'fastify';
@@ -21,6 +21,7 @@ import { registerChannelRoutes } from './routes/channels.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerGitRoutes } from './routes/git.js';
 import { registerMachineTemplateRoutes } from './routes/machineTemplates.js';
+import { registerMonitorRoutes } from './routes/monitors.js';
 import { registerOrchestratorRoutes } from './routes/orchestrator.js';
 import { registerPipelineRoutes } from './routes/pipeline.js';
 import { registerProjectRoutes } from './routes/projects.js';
@@ -78,6 +79,7 @@ async function main(): Promise<void> {
     timeoutMs: store.config().triggerTimeoutMs,
   });
   const monitorScheduler = new MonitorScheduler(store, pipelineRunner);
+  const projectMonitorScheduler = new ProjectMonitorScheduler(store, pipelineRunner, agentRunner);
 
   const triggerRunner = new TriggerRunner(store, agentRunner, {
     timeoutMs: store.config().triggerTimeoutMs,
@@ -92,6 +94,9 @@ async function main(): Promise<void> {
   // monitor timers for anything already in the monitoring stage.
   await pipelineRunner.recover();
   monitorScheduler.start();
+  // Project monitors resume from the persisted monitors file — reconcile
+  // re-arms one timer per enabled check.
+  projectMonitorScheduler.start();
 
   // Repo provisioning jobs don't survive a restart; land any in-flight
   // repos on `failed` so the UI offers a retry.
@@ -175,6 +180,7 @@ async function main(): Promise<void> {
   await registerChannelRoutes(app, store);
   await registerToolboxRoutes(app, store);
   await registerMachineTemplateRoutes(app, store);
+  await registerMonitorRoutes(app, store, projectMonitorScheduler);
   await registerVaultRoutes(app, store);
   await registerActivityRoutes(app, store);
   await registerOrchestratorRoutes(app, store);
@@ -204,6 +210,7 @@ async function main(): Promise<void> {
     app.log.info('shutting down');
     cronScheduler.stop();
     monitorScheduler.stop();
+    projectMonitorScheduler.stop();
     await channels.stop();
     await ccWatcher.stop();
     await app.close();

@@ -155,6 +155,17 @@ export function buildProjectPreamble(project: Project): string {
 }
 
 /**
+ * The slice of a machine (or project-monitor check) that tool resolution
+ * needs; `key` is only used to label warnings.
+ */
+export interface ToolAssignmentOwner {
+  key: string;
+  skills?: string[];
+  mcpServers?: string[];
+  requiredEnv?: string[];
+}
+
+/**
  * Resolves toolbox assignments (ids) to full definitions for the agent
  * runner: the union of project-level assignments (shared by every machine
  * in the lane) and the machine's own. Always returns a payload —
@@ -165,9 +176,9 @@ export function buildProjectPreamble(project: Project): string {
  * The machine's own requiredEnv (its "variables") joins the assigned tools'
  * required keys, so those vault values reach the run env too.
  */
-function resolveToolAssignments(
+export function resolveToolAssignments(
   store: Store,
-  machine: PipelineMachine,
+  machine: ToolAssignmentOwner,
   project: Project,
 ): RunToolAssignments {
   const toolbox = store.toolbox();
@@ -303,7 +314,7 @@ export function buildContext(
  * convention still work. Legacy TEST_RESULT/MONITOR_RESULT markers are
  * honored for prompts migrated from pre-v7 stores.
  */
-function checkResultMarker(
+export function checkResultMarker(
   mode: 'strict' | 'lenient' | undefined,
   text: string,
 ): string | undefined {

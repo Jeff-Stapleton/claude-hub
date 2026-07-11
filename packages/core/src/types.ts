@@ -354,7 +354,10 @@ export interface WorkItem {
   /** The raw request text driving the pipeline (prompt-template context). */
   request: string;
   source: WorkItemSource;
-  /** triggerId | channel conversation key | failed work item id (monitor defects). */
+  /**
+   * triggerId | channel conversation key | failed work item id (monitor
+   * defects) | `project-monitor:<checkId>` (project-monitor defects).
+   */
   sourceRef?: string;
   status: WorkItemStatus;
   /** Key of the machine the item is currently at. */
@@ -372,6 +375,80 @@ export interface WorkItem {
   updatedAt: ISODateString;
   finishedAt?: ISODateString;
 }
+
+// ---------------------------------------------------------------------------
+// Project monitors (continuous post-ship health checks)
+// ---------------------------------------------------------------------------
+
+export type ProjectMonitorCheckType = 'http' | 'command' | 'agent';
+
+interface ProjectMonitorCheckBase {
+  /** uuid; stable identity — status is keyed by it and survives config edits. */
+  id: string;
+  name: string;
+  /** Minutes between runs of this check. Minimum 1. */
+  intervalMinutes: number;
+  /** Per-type default when absent: http 10s, command 5min, agent 30min. */
+  timeoutMs?: number;
+}
+
+export interface HttpMonitorCheck extends ProjectMonitorCheckBase {
+  type: 'http';
+  url: string;
+  /** Exact status expected; absent = any 2xx. */
+  expectedStatus?: number;
+}
+
+export interface CommandMonitorCheck extends ProjectMonitorCheckBase {
+  type: 'command';
+  /** Shell command run in the project root; exit 0 = healthy. */
+  command: string;
+}
+
+export interface AgentMonitorCheck extends ProjectMonitorCheckBase {
+  type: 'agent';
+  /** Prompt run via agent-runner; the run must end `MACHINE_RESULT: PASS`/`FAIL`. */
+  prompt: string;
+  /** Falls back to config.defaultProvider. */
+  provider?: AgentProviderId;
+}
+
+export type ProjectMonitorCheck = HttpMonitorCheck | CommandMonitorCheck | AgentMonitorCheck;
+
+export interface MonitorCheckStatus {
+  lastStatus: 'pass' | 'fail';
+  lastCheckedAt: ISODateString;
+  lastDurationMs?: number;
+  /** Truncated check output for the config panel; full detail is not kept. */
+  lastOutput?: string;
+  lastError?: string;
+  consecutiveFails: number;
+}
+
+export interface ProjectMonitorStatus {
+  /** Keyed by check id. A configured check with no entry hasn't run yet. */
+  checks: Record<string, MonitorCheckStatus>;
+  /** Once-per-outage defect guard: set when a defect files, cleared on full recovery. */
+  outageOpen: boolean;
+}
+
+/**
+ * Continuous health monitoring for a shipped project. Unlike a machine's
+ * bounded monitor loop (soak test on one work item), this runs indefinitely
+ * while the hub is up: one timer per check, re-armed from disk on boot.
+ */
+export interface ProjectMonitor {
+  projectId: string;
+  enabled: boolean;
+  checks: ProjectMonitorCheck[];
+  /** File a `source: 'monitor'` defect work item once per outage. */
+  fileDefectOnFailure: boolean;
+  status: ProjectMonitorStatus;
+  createdAt: ISODateString;
+  updatedAt: ISODateString;
+}
+
+export type ProjectMonitorHealth = 'healthy' | 'down' | 'unknown';
 
 // ---------------------------------------------------------------------------
 // Toolbox (skills + MCP servers assignable per machine)
@@ -502,7 +579,7 @@ export type AgentProviderConfigs = {
  * file lands; the store refuses to load mismatched versions to avoid silent
  * data corruption.
  */
-export const STORE_SCHEMA_VERSION = 7;
+export const STORE_SCHEMA_VERSION = 8;
 
 export interface AppConfig {
   schemaVersion: number;
@@ -543,6 +620,8 @@ export interface StoreSnapshot {
   machineTemplates: MachineTemplate[];
   gitCredentials: GitCredential[];
   vault: VaultEntry[];
+  /** Per-project continuous health monitors (config + latest check status). */
+  monitors: ProjectMonitor[];
 }
 
 export type StoreEntityKey = keyof StoreSnapshot;

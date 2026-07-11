@@ -5,7 +5,7 @@ import {
   type StageGate,
   type Store,
 } from '@claude-hub/core';
-import { listMachineTemplates } from '@claude-hub/pipeline';
+import { listInstallableMachineTemplates, listMachineTemplates } from '@claude-hub/pipeline';
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { ensureVaultKeys, parseRequiredEnv } from '../vault.js';
@@ -27,7 +27,7 @@ export async function registerMachineTemplateRoutes(
   app: FastifyInstance,
   store: Store,
 ): Promise<void> {
-  app.get('/api/machine-templates', async () => listMachineTemplates(store));
+  app.get('/api/machine-templates', async () => listInstallableMachineTemplates(store));
 
   app.post<{ Body: MachineTemplateBody }>('/api/machine-templates', async (req, reply) => {
     const parsed = parseTemplateBody(req.body, store);
