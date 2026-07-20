@@ -128,8 +128,9 @@ export async function registerToolboxRoutes(app: FastifyInstance, store: Store):
     '/api/toolbox/mcp-servers/:id',
     async (req, reply) => {
       const existing = store.toolbox().mcpServers.find((m) => m.id === req.params.id);
-      if (!existing) return reply.code(404).send({ error: 'not found' });
-      const parsed = parseMcpServerBody(req.body, existing.transport);
+      const guarded = guardMutableServer(reply, existing);
+      if (guarded) return guarded;
+      const parsed = parseMcpServerBody(req.body, existing!.transport);
       if (typeof parsed === 'string') return reply.code(400).send({ error: parsed });
       if (
         store.toolbox().mcpServers.some((m) => m.id !== req.params.id && m.name === parsed.name)
@@ -141,9 +142,13 @@ export async function registerToolboxRoutes(app: FastifyInstance, store: Store):
       // Rebuild rather than spread over `existing` so a cleared description
       // doesn't linger from the stored entry.
       const updated: ToolboxMcpServer = {
-        id: existing.id,
+        id: existing!.id,
         ...parsed,
-        createdAt: existing.createdAt,
+        ...(existing!.source !== undefined ? { source: existing!.source } : {}),
+        ...(existing!.bundledVersion !== undefined
+          ? { bundledVersion: existing!.bundledVersion }
+          : {}),
+        createdAt: existing!.createdAt,
         updatedAt: new Date().toISOString(),
       };
       await store.update('toolbox', (current) => ({
@@ -156,9 +161,9 @@ export async function registerToolboxRoutes(app: FastifyInstance, store: Store):
   );
 
   app.delete<{ Params: { id: string } }>('/api/toolbox/mcp-servers/:id', async (req, reply) => {
-    if (!store.toolbox().mcpServers.some((m) => m.id === req.params.id)) {
-      return reply.code(404).send({ error: 'not found' });
-    }
+    const existing = store.toolbox().mcpServers.find((m) => m.id === req.params.id);
+    const guarded = guardMutableServer(reply, existing);
+    if (guarded) return guarded;
     await store.update('toolbox', (current) => ({
       ...current,
       mcpServers: current.mcpServers.filter((m) => m.id !== req.params.id),
@@ -173,6 +178,20 @@ function guardMutable(reply: FastifyReply, skill: ToolboxSkill | undefined): unk
   if (!skill) return reply.code(404).send({ error: 'not found' });
   if (skill.source === 'bundled') {
     return reply.code(400).send({ error: 'bundled skills are read-only; duplicate to edit' });
+  }
+  return undefined;
+}
+
+/** 404 for missing servers, 400 for bundled ones; undefined when mutable. */
+function guardMutableServer(
+  reply: FastifyReply,
+  server: ToolboxMcpServer | undefined,
+): unknown {
+  if (!server) return reply.code(404).send({ error: 'not found' });
+  if (server.source === 'bundled') {
+    return reply
+      .code(400)
+      .send({ error: 'bundled MCP servers are read-only; duplicate to edit' });
   }
   return undefined;
 }

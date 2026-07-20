@@ -3,13 +3,17 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { HubPaths, Store, type ToolboxSkill } from '@claude-hub/core';
+import { HubPaths, Store, type ToolboxMcpServer, type ToolboxSkill } from '@claude-hub/core';
 import { CCConfigReader } from '@claude-hub/cc-config-reader';
 import type { PipelineRunner } from '@claude-hub/pipeline';
 import { registerPipelineRoutes } from '../src/routes/pipeline.js';
 import { registerToolboxRoutes } from '../src/routes/toolbox.js';
 import { buildUIState } from '../src/state.js';
-import { seedBundledSkills } from '../src/toolboxSeed.js';
+import {
+  seedBundledMcpServers,
+  seedBundledSkills,
+  type BundledMcpServerDef,
+} from '../src/toolboxSeed.js';
 
 const SKILL_PAYLOAD = {
   name: 'my-skill',
@@ -475,5 +479,173 @@ describe('seedBundledSkills', () => {
       expect(skill.description.length).toBeGreaterThan(0);
       expect(skill.tags.length).toBeGreaterThan(0);
     }
+  });
+});
+
+describe('seedBundledMcpServers', () => {
+  let root: string;
+  let store: Store;
+
+  function gitlabDef(overrides: Partial<BundledMcpServerDef> = {}): BundledMcpServerDef {
+    return {
+      slug: 'gitlab',
+      version: 1,
+      description: 'GitLab workflow tools',
+      tags: ['git', 'gitlab'],
+      requiredEnv: ['GITLAB_TOKEN'],
+      transport: { type: 'stdio', command: 'node', args: ['/repo/packages/gitlab-mcp/dist/server.js'] },
+      ...overrides,
+    };
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'mcp-seed-'));
+    store = new Store(new HubPaths(root));
+    await store.load();
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('seeds a bundled server with a stable id and declares its vault keys unset', async () => {
+    await seedBundledMcpServers(store, [gitlabDef()]);
+
+    const servers = store.toolbox().mcpServers;
+    expect(servers).toHaveLength(1);
+    const server = servers[0]!;
+    expect(server.id).toBe('bundled-gitlab');
+    expect(server.name).toBe('gitlab');
+    expect(server.source).toBe('bundled');
+    expect(server.bundledVersion).toBe(1);
+    expect(server.requiredEnv).toEqual(['GITLAB_TOKEN']);
+    expect(server.transport).toEqual(gitlabDef().transport);
+
+    const entry = store.vault().find((v) => v.key === 'GITLAB_TOKEN');
+    expect(entry).toBeDefined();
+    expect(entry!.value).toBeNull();
+  });
+
+  it('is idempotent and reseeds on a version bump preserving createdAt', async () => {
+    await seedBundledMcpServers(store, [gitlabDef()]);
+    const first = store.toolbox().mcpServers[0]!;
+
+    await seedBundledMcpServers(store, [gitlabDef()]);
+    expect(store.toolbox().mcpServers[0]).toEqual(first);
+
+    await seedBundledMcpServers(store, [gitlabDef({ version: 2, description: 'Updated' })]);
+    const reseeded = store.toolbox().mcpServers[0]!;
+    expect(reseeded.bundledVersion).toBe(2);
+    expect(reseeded.description).toBe('Updated');
+    expect(reseeded.createdAt).toBe(first.createdAt);
+  });
+
+  it('rewrites the entry when the stored transport path drifts', async () => {
+    await seedBundledMcpServers(store, [gitlabDef()]);
+    const moved = gitlabDef({
+      transport: { type: 'stdio', command: 'node', args: ['/new-home/packages/gitlab-mcp/dist/server.js'] },
+    });
+    await seedBundledMcpServers(store, [moved]);
+    const server = store.toolbox().mcpServers[0]!;
+    expect(server.transport).toEqual(moved.transport);
+    expect(server.bundledVersion).toBe(1);
+  });
+
+  it('never clobbers a user server that owns the bundled name', async () => {
+    const userServer: ToolboxMcpServer = {
+      id: 'u1',
+      name: 'gitlab',
+      transport: { type: 'stdio', command: 'my-gitlab' },
+      tags: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    await store.update('toolbox', (t) => ({ ...t, mcpServers: [userServer] }));
+    await seedBundledMcpServers(store, [gitlabDef()]);
+
+    expect(store.toolbox().mcpServers).toHaveLength(1);
+    expect(store.toolbox().mcpServers[0]).toEqual(userServer);
+  });
+
+  it('the shipped defs seed cleanly', async () => {
+    await seedBundledMcpServers(store); // default bundled defs
+    const servers = store.toolbox().mcpServers;
+    expect(servers.length).toBeGreaterThanOrEqual(1);
+    const gitlab = servers.find((s) => s.name === 'gitlab');
+    expect(gitlab).toBeDefined();
+    expect(gitlab!.id).toBe('bundled-gitlab');
+    expect(gitlab!.source).toBe('bundled');
+    expect(gitlab!.requiredEnv).toEqual(['GITLAB_TOKEN']);
+    expect(gitlab!.transport.type).toBe('stdio');
+  });
+});
+
+describe('bundled MCP server route guards', () => {
+  let app: FastifyInstance;
+  let store: Store;
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'mcp-guard-'));
+    store = new Store(new HubPaths(root));
+    await store.load();
+    await seedBundledMcpServers(store, [
+      {
+        slug: 'gitlab',
+        version: 1,
+        description: 'GitLab workflow tools',
+        tags: ['git'],
+        requiredEnv: ['GITLAB_TOKEN'],
+        transport: { type: 'stdio', command: 'node', args: ['/repo/server.js'] },
+      },
+    ]);
+    app = Fastify();
+    await registerToolboxRoutes(app, store);
+    await app.ready();
+  });
+
+  afterEach(async () => {
+    await app.close();
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('rejects PUT and DELETE on a bundled server', async () => {
+    const put = await app.inject({
+      method: 'PUT',
+      url: '/api/toolbox/mcp-servers/bundled-gitlab',
+      payload: { name: 'gitlab', transport: { type: 'stdio', command: 'evil' } },
+    });
+    expect(put.statusCode).toBe(400);
+    expect(JSON.parse(put.body).error).toContain('read-only');
+
+    const del = await app.inject({
+      method: 'DELETE',
+      url: '/api/toolbox/mcp-servers/bundled-gitlab',
+    });
+    expect(del.statusCode).toBe(400);
+    expect(store.toolbox().mcpServers).toHaveLength(1);
+  });
+
+  it('still allows creating and mutating user servers alongside the bundled one', async () => {
+    const created = await app.inject({
+      method: 'POST',
+      url: '/api/toolbox/mcp-servers',
+      payload: STDIO_SERVER_PAYLOAD,
+    });
+    expect(created.statusCode).toBe(200);
+    const id = JSON.parse(created.body).id;
+
+    const del = await app.inject({ method: 'DELETE', url: `/api/toolbox/mcp-servers/${id}` });
+    expect(del.statusCode).toBe(200);
+    expect(store.toolbox().mcpServers).toHaveLength(1);
+  });
+
+  it('duplicating the bundled name still hits the uniqueness check', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/toolbox/mcp-servers',
+      payload: { name: 'gitlab', transport: { type: 'stdio', command: 'x' } },
+    });
+    expect(res.statusCode).toBe(400);
   });
 });

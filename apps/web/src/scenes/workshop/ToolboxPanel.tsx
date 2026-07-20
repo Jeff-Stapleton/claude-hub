@@ -228,22 +228,39 @@ export function ToolboxPanel({
                 tags={server.tags}
                 requiredEnv={server.requiredEnv ?? []}
                 vault={vault}
-                actions={[
-                  {
-                    label: 'edit',
-                    onClick: () =>
-                      setView({
-                        mode: 'server-form',
-                        editing: server,
-                        initial: toServerDraft(server),
-                      }),
-                  },
-                  {
-                    label: 'delete',
-                    danger: true,
-                    onClick: () => submit({ type: 'delete-server', id: server.id }),
-                  },
-                ]}
+                badge={server.source === 'bundled' ? 'bundled' : undefined}
+                actions={
+                  server.source === 'bundled'
+                    ? [
+                        {
+                          label: 'duplicate',
+                          onClick: () =>
+                            setView({
+                              mode: 'server-form',
+                              initial: {
+                                ...toServerDraft(server),
+                                name: `${server.name}-copy`,
+                              },
+                            }),
+                        },
+                      ]
+                    : [
+                        {
+                          label: 'edit',
+                          onClick: () =>
+                            setView({
+                              mode: 'server-form',
+                              editing: server,
+                              initial: toServerDraft(server),
+                            }),
+                        },
+                        {
+                          label: 'delete',
+                          danger: true,
+                          onClick: () => submit({ type: 'delete-server', id: server.id }),
+                        },
+                      ]
+                }
               />
             ))}
           </>

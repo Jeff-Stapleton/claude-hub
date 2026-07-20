@@ -1,7 +1,9 @@
 import {
   TOOLBOX_NAME_PATTERN,
   VAULT_KEY_PATTERN,
+  type McpTransport,
   type Store,
+  type ToolboxMcpServer,
   type ToolboxSkill,
 } from '@claude-hub/core';
 import { readFile, readdir } from 'node:fs/promises';
@@ -67,6 +69,104 @@ export async function seedBundledSkills(
   await store.update('toolbox', (toolbox) => ({
     ...toolbox,
     skills: [...toolbox.skills.filter((s) => !changed.has(s.id)), ...changes],
+  }));
+  // Declare required keys in the vault (unset) so the vault lamp can warn.
+  // ensureVaultKeys never overwrites, so reseeds can't clobber user values.
+  await ensureVaultKeys(
+    store,
+    changes.flatMap((s) => s.requiredEnv ?? []),
+  );
+}
+
+export interface BundledMcpServerDef {
+  slug: string;
+  version: number;
+  description: string;
+  tags: string[];
+  requiredEnv: string[];
+  transport: McpTransport;
+}
+
+/**
+ * Bundled MCP servers are code literals rather than markdown assets: their
+ * stdio transport needs an absolute entry-point path computed at boot, which
+ * frontmatter can't express. Same three-levels-up hop as the hub-mcp path in
+ * main.ts — it resolves from both src/ (tsx dev) and dist/ (built).
+ */
+const GITLAB_MCP_SERVER_PATH = resolve(
+  __dirname,
+  '../../../packages/gitlab-mcp/dist/server.js',
+);
+
+const BUNDLED_MCP_SERVERS: BundledMcpServerDef[] = [
+  {
+    slug: 'gitlab',
+    version: 1,
+    description:
+      'GitLab workflow tools: clone repos, create/push branches, and create, list, view, and approve merge requests. Defaults to gitlab.com; set GITLAB_URL for self-hosted.',
+    tags: ['git', 'gitlab'],
+    requiredEnv: ['GITLAB_TOKEN'],
+    transport: {
+      type: 'stdio',
+      command: 'node',
+      args: [GITLAB_MCP_SERVER_PATH.replace(/\\/g, '/')],
+    },
+  },
+];
+
+/**
+ * Seeds bundled MCP servers with stable `bundled-<slug>` ids, mirroring
+ * seedBundledSkills. Also reseeds when the stored transport drifts from the
+ * shipped one (e.g. the repo moved and the persisted absolute path is stale).
+ * Never touches user-created servers, even if one squats on a bundled name.
+ */
+export async function seedBundledMcpServers(
+  store: Store,
+  defs: BundledMcpServerDef[] = BUNDLED_MCP_SERVERS,
+): Promise<void> {
+  if (defs.length === 0) return;
+
+  const servers = store.toolbox().mcpServers;
+  const existing = new Map(servers.map((s) => [s.id, s]));
+  const now = new Date().toISOString();
+  const changes: ToolboxMcpServer[] = [];
+
+  for (const def of defs) {
+    const id = `bundled-${def.slug}`;
+    const current = existing.get(id);
+    const nameOwner = servers.find((s) => s.name === def.slug && s.id !== id);
+    if (nameOwner) {
+      console.warn(
+        `[toolbox] skipping bundled MCP server "${def.slug}": a user server already owns the name`,
+      );
+      continue;
+    }
+    if (
+      current &&
+      (current.bundledVersion ?? 0) >= def.version &&
+      JSON.stringify(current.transport) === JSON.stringify(def.transport)
+    ) {
+      continue;
+    }
+    changes.push({
+      id,
+      name: def.slug,
+      description: def.description,
+      transport: def.transport,
+      tags: def.tags,
+      ...(def.requiredEnv.length > 0 ? { requiredEnv: def.requiredEnv } : {}),
+      source: 'bundled',
+      bundledVersion: def.version,
+      createdAt: current?.createdAt ?? now,
+      updatedAt: now,
+    });
+  }
+  if (changes.length === 0) return;
+
+  const changed = new Set(changes.map((s) => s.id));
+  await store.update('toolbox', (toolbox) => ({
+    ...toolbox,
+    mcpServers: [...toolbox.mcpServers.filter((s) => !changed.has(s.id)), ...changes],
   }));
   // Declare required keys in the vault (unset) so the vault lamp can warn.
   // ensureVaultKeys never overwrites, so reseeds can't clobber user values.

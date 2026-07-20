@@ -237,6 +237,8 @@ export interface ToolboxMcpServer {
   transport: RedactedMcpTransport;
   tags: string[];
   requiredEnv?: string[];
+  source?: 'bundled' | 'user';
+  bundledVersion?: number;
   createdAt: string;
   updatedAt: string;
 }

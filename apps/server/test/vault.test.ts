@@ -8,7 +8,7 @@ import { CCConfigReader } from '@claude-hub/cc-config-reader';
 import { registerToolboxRoutes } from '../src/routes/toolbox.js';
 import { registerVaultRoutes } from '../src/routes/vault.js';
 import { buildUIState } from '../src/state.js';
-import { seedBundledSkills } from '../src/toolboxSeed.js';
+import { seedBundledMcpServers, seedBundledSkills } from '../src/toolboxSeed.js';
 
 const SECRET = 'PLAINTEXT_VAULT_SECRET_VALUE';
 
@@ -360,5 +360,25 @@ describe('bundled skill requiredEnv seeding', () => {
     await seedBundledSkills(store, assetsDir);
     expect(store.toolbox().skills[0]!.bundledVersion).toBe(2);
     expect(store.vault().find((e) => e.key === 'GITHUB_TOKEN')!.value).toBe(SECRET);
+  });
+
+  it('seeding a bundled MCP server declares its keys unset and reseeds keep values', async () => {
+    const def = (version: number) => ({
+      slug: 'gitlab',
+      version,
+      description: 'GitLab workflow tools',
+      tags: ['git'],
+      requiredEnv: ['GITLAB_TOKEN'],
+      transport: { type: 'stdio' as const, command: 'node', args: ['/repo/server.js'] },
+    });
+    await seedBundledMcpServers(store, [def(1)]);
+    expect(store.vault().find((e) => e.key === 'GITLAB_TOKEN')!.value).toBeNull();
+
+    await store.update('vault', (v) =>
+      v.map((e) => (e.key === 'GITLAB_TOKEN' ? { ...e, value: SECRET } : e)),
+    );
+    await seedBundledMcpServers(store, [def(2)]);
+    expect(store.toolbox().mcpServers[0]!.bundledVersion).toBe(2);
+    expect(store.vault().find((e) => e.key === 'GITLAB_TOKEN')!.value).toBe(SECRET);
   });
 });

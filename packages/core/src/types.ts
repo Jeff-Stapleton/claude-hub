@@ -492,6 +492,10 @@ export interface ToolboxMcpServer {
   tags: string[];
   /** Vault keys (VAULT_KEY_PATTERN) this server needs at run time. */
   requiredEnv?: string[];
+  /** Absent = user-created. Bundled servers are seeded at boot and read-only. */
+  source?: 'bundled' | 'user';
+  /** Bundled only: shipped version; a higher shipped version reseeds the entry. */
+  bundledVersion?: number;
   createdAt: ISODateString;
   updatedAt: ISODateString;
 }

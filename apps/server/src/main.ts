@@ -29,7 +29,7 @@ import { registerStateRoutes } from './routes/state.js';
 import { registerToolboxRoutes } from './routes/toolbox.js';
 import { registerTriggerRoutes } from './routes/triggers.js';
 import { registerVaultRoutes } from './routes/vault.js';
-import { seedBundledSkills } from './toolboxSeed.js';
+import { seedBundledMcpServers, seedBundledSkills } from './toolboxSeed.js';
 import { registerWs } from './ws.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -65,6 +65,7 @@ async function main(): Promise<void> {
   const store = new Store();
   await store.load();
   await seedBundledSkills(store);
+  await seedBundledMcpServers(store);
 
   const ccReader = new CCConfigReader();
   const ccWatcher = new CCWatcher(ccReader);
