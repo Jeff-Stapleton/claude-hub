@@ -209,7 +209,10 @@ export function ProjectLane({
     entities.push({
       key: `item-${item.id}`,
       anchor: { x: slot.x, y: y0 + slot.y, z: slot.z },
-      layer: 2,
+      // Failed items are spat out at the machine mouth where the depth sort
+      // near-ties with the machine body; lift them above machines and the
+      // insert ghost so they stay visible and clickable.
+      layer: item.status === 'failed' ? 3 : 2,
       node: (
         <LaneWorkItemBox
           item={item}
