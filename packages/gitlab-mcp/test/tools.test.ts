@@ -19,7 +19,7 @@ interface RecordedRequest {
 }
 
 function fakeFetch(
-  responses: { status?: number; body?: unknown }[] = [{}],
+  responses: { status?: number; body?: unknown; text?: string }[] = [{}],
 ): { fetchFn: FetchFn; requests: RecordedRequest[] } {
   const requests: RecordedRequest[] = [];
   const queue = [...responses];
@@ -32,7 +32,7 @@ function fakeFetch(
     });
     const next = queue.length > 1 ? queue.shift()! : queue[0]!;
     const status = next.status ?? 200;
-    const text = next.body === undefined ? '{}' : JSON.stringify(next.body);
+    const text = next.text ?? (next.body === undefined ? '{}' : JSON.stringify(next.body));
     return new Response(text, { status });
   };
   return { fetchFn, requests };
@@ -214,6 +214,281 @@ describe('git tools', () => {
     expect(gitCalls[0]!.opts.token).toBe(TOKEN);
     await tools.gitlab_push_branch.handler({ repoDir: '/tmp/proj', setUpstream: false });
     expect(gitCalls[1]!.args).toEqual(['push', 'origin', 'HEAD']);
+  });
+});
+
+describe('MR discussion tools', () => {
+  const DISCUSSION_FIXTURE = [
+    {
+      id: 'abc123',
+      individual_note: false,
+      notes: [
+        {
+          id: 11,
+          body: 'Please rename this variable',
+          system: false,
+          resolvable: true,
+          resolved: false,
+          author: { username: 'reviewer' },
+          position: { new_path: 'src/app.ts', new_line: 42 },
+        },
+        {
+          id: 12,
+          body: 'added 1 commit',
+          system: true,
+          resolvable: false,
+          author: { username: 'bot' },
+        },
+      ],
+    },
+    {
+      id: 'sysonly',
+      individual_note: true,
+      notes: [
+        { id: 13, body: 'changed the description', system: true, resolvable: false },
+      ],
+    },
+  ];
+
+  it('lists discussions, filters system notes, and extracts file positions', async () => {
+    const { tools, requests } = setup({ responses: [{ body: DISCUSSION_FIXTURE }] });
+    const result = await tools.gitlab_list_mr_discussions.handler({
+      project: 'group/proj',
+      mrIid: 7,
+    });
+    expect(requests[0]!.url).toBe(
+      'https://gitlab.com/api/v4/projects/group%2Fproj/merge_requests/7/discussions?per_page=100',
+    );
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ id: 'abc123', resolvable: true, resolved: false });
+    expect(result[0]!.notes).toEqual([
+      {
+        id: 11,
+        author: 'reviewer',
+        body: 'Please rename this variable',
+        resolvable: true,
+        resolved: false,
+        filePath: 'src/app.ts',
+        line: 42,
+      },
+    ]);
+  });
+
+  it('keeps system notes when includeSystem is set', async () => {
+    const { tools } = setup({ responses: [{ body: DISCUSSION_FIXTURE }] });
+    const result = await tools.gitlab_list_mr_discussions.handler({
+      project: 'group/proj',
+      mrIid: 7,
+      includeSystem: true,
+    });
+    expect(result).toHaveLength(2);
+    expect(result[0]!.notes).toHaveLength(2);
+  });
+
+  it('truncates long note bodies', async () => {
+    const long = 'x'.repeat(3000);
+    const fixture = [
+      {
+        id: 'd1',
+        individual_note: true,
+        notes: [{ id: 1, body: long, system: false, resolvable: true, resolved: false }],
+      },
+    ];
+    const { tools } = setup({ responses: [{ body: fixture }] });
+    const result = await tools.gitlab_list_mr_discussions.handler({
+      project: 'group/proj',
+      mrIid: 7,
+    });
+    expect(result[0]!.notes[0]!.body.length).toBeLessThan(2100);
+    expect(result[0]!.notes[0]!.body).toContain('[… truncated]');
+  });
+
+  it('replies to a discussion vs posting a general comment', async () => {
+    const { tools, requests } = setup({ responses: [{ body: { id: 99 } }] });
+    await tools.gitlab_comment_merge_request.handler({
+      project: 'group/proj',
+      mrIid: 7,
+      body: 'Fixed in latest push',
+      discussionId: 'abc123',
+    });
+    await tools.gitlab_comment_merge_request.handler({
+      project: 'group/proj',
+      mrIid: 7,
+      body: 'General note',
+    });
+    expect(requests[0]!.url).toBe(
+      'https://gitlab.com/api/v4/projects/group%2Fproj/merge_requests/7/discussions/abc123/notes',
+    );
+    expect(requests[0]!.method).toBe('POST');
+    expect(JSON.parse(requests[0]!.body!)).toEqual({ body: 'Fixed in latest push' });
+    expect(requests[1]!.url).toBe(
+      'https://gitlab.com/api/v4/projects/group%2Fproj/merge_requests/7/notes',
+    );
+  });
+
+  it('resolves a discussion (default true)', async () => {
+    const { tools, requests } = setup({ responses: [{ body: { id: 'abc123' } }] });
+    const result = await tools.gitlab_resolve_mr_discussion.handler({
+      project: 'group/proj',
+      mrIid: 7,
+      discussionId: 'abc123',
+    });
+    expect(requests[0]!.url).toBe(
+      'https://gitlab.com/api/v4/projects/group%2Fproj/merge_requests/7/discussions/abc123',
+    );
+    expect(requests[0]!.method).toBe('PUT');
+    expect(JSON.parse(requests[0]!.body!)).toEqual({ resolved: true });
+    expect(result).toContain('Resolved discussion abc123');
+  });
+});
+
+describe('CI pipeline tools', () => {
+  it('lists MR pipelines with trimmed fields', async () => {
+    const { tools, requests } = setup({
+      responses: [
+        {
+          body: [
+            {
+              id: 501,
+              status: 'failed',
+              sha: 'deadbeef',
+              web_url: 'https://gitlab.com/group/proj/-/pipelines/501',
+              created_at: '2026-07-20T10:00:00Z',
+            },
+          ],
+        },
+      ],
+    });
+    const result = await tools.gitlab_list_mr_pipelines.handler({ project: 'group/proj', mrIid: 7 });
+    expect(requests[0]!.url).toBe(
+      'https://gitlab.com/api/v4/projects/group%2Fproj/merge_requests/7/pipelines',
+    );
+    expect(result).toEqual([
+      {
+        id: 501,
+        status: 'failed',
+        sha: 'deadbeef',
+        webUrl: 'https://gitlab.com/group/proj/-/pipelines/501',
+        createdAt: '2026-07-20T10:00:00Z',
+      },
+    ]);
+  });
+
+  it('lists pipeline jobs with a scope filter', async () => {
+    const { tools, requests } = setup({
+      responses: [
+        {
+          body: [
+            {
+              id: 9001,
+              name: 'unit-tests',
+              stage: 'test',
+              status: 'failed',
+              allow_failure: false,
+              web_url: 'https://gitlab.com/group/proj/-/jobs/9001',
+            },
+          ],
+        },
+      ],
+    });
+    const result = await tools.gitlab_get_pipeline_jobs.handler({
+      project: 'group/proj',
+      pipelineId: 501,
+      scope: 'failed',
+    });
+    expect(requests[0]!.url).toBe(
+      'https://gitlab.com/api/v4/projects/group%2Fproj/pipelines/501/jobs?scope[]=failed',
+    );
+    expect(result).toEqual([
+      {
+        id: 9001,
+        name: 'unit-tests',
+        stage: 'test',
+        status: 'failed',
+        allowFailure: false,
+        webUrl: 'https://gitlab.com/group/proj/-/jobs/9001',
+      },
+    ]);
+  });
+
+  it('tails the job log and marks truncation', async () => {
+    const lines = Array.from({ length: 500 }, (_, i) => `line ${i + 1}`);
+    const { tools, requests } = setup({ responses: [{ text: lines.join('\n') }] });
+    const result = await tools.gitlab_get_job_log.handler({
+      project: 'group/proj',
+      jobId: 9001,
+      tailLines: 100,
+    });
+    expect(requests[0]!.url).toBe(
+      'https://gitlab.com/api/v4/projects/group%2Fproj/jobs/9001/trace',
+    );
+    expect(result).toContain('[… trace truncated: showing last 100 of 500 lines]');
+    expect(result).toContain('line 500');
+    expect(result).not.toContain('line 400\n');
+  });
+
+  it('returns short logs untouched and scrubs tokens from traces', async () => {
+    const { tools } = setup({ responses: [{ text: `building with ${TOKEN}\ndone` }] });
+    const result = await tools.gitlab_get_job_log.handler({ project: 'group/proj', jobId: 9001 });
+    expect(result).toBe('building with ***\ndone');
+  });
+});
+
+describe('merge and rebase tools', () => {
+  it('merges an MR and summarizes the result', async () => {
+    const { tools, requests } = setup({
+      responses: [{ body: { ...MR_FIXTURE, state: 'merged' } }],
+    });
+    const result = await tools.gitlab_merge_merge_request.handler({
+      project: 'group/proj',
+      mrIid: 7,
+      squash: true,
+      removeSourceBranch: true,
+    });
+    expect(requests[0]!.url).toBe(
+      'https://gitlab.com/api/v4/projects/group%2Fproj/merge_requests/7/merge',
+    );
+    expect(requests[0]!.method).toBe('PUT');
+    expect(JSON.parse(requests[0]!.body!)).toEqual({
+      squash: true,
+      should_remove_source_branch: true,
+    });
+    expect(result).toMatchObject({ iid: 7, state: 'merged' });
+  });
+
+  it('reports armed auto-merge when MWPS is set and the MR stays open', async () => {
+    const { tools, requests } = setup({ responses: [{ body: MR_FIXTURE }] });
+    const result = await tools.gitlab_merge_merge_request.handler({
+      project: 'group/proj',
+      mrIid: 7,
+      mergeWhenPipelineSucceeds: true,
+    });
+    expect(JSON.parse(requests[0]!.body!)).toEqual({ merge_when_pipeline_succeeds: true });
+    expect(result).toContain('Auto-merge armed');
+  });
+
+  it('adds a readable hint on 405 (not mergeable)', async () => {
+    const { tools } = setup({ responses: [{ status: 405, body: { message: 'Method Not Allowed' } }] });
+    await expect(
+      tools.gitlab_merge_merge_request.handler({ project: 'group/proj', mrIid: 7 }),
+    ).rejects.toThrow(/not mergeable yet/);
+  });
+
+  it('adds a readable hint on 406 (diverged)', async () => {
+    const { tools } = setup({ responses: [{ status: 406, body: { message: 'Branch cannot be merged' } }] });
+    await expect(
+      tools.gitlab_merge_merge_request.handler({ project: 'group/proj', mrIid: 7 }),
+    ).rejects.toThrow(/rebase first/);
+  });
+
+  it('starts a rebase', async () => {
+    const { tools, requests } = setup({ responses: [{ status: 202, body: { rebase_in_progress: true } }] });
+    const result = await tools.gitlab_rebase_merge_request.handler({ project: 'group/proj', mrIid: 7 });
+    expect(requests[0]!.url).toBe(
+      'https://gitlab.com/api/v4/projects/group%2Fproj/merge_requests/7/rebase',
+    );
+    expect(requests[0]!.method).toBe('PUT');
+    expect(result).toContain('Rebase of !7 started');
   });
 });
 

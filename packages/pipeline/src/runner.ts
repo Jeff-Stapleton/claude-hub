@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import {
   DEFAULT_MONITOR_MAX_CHECKS,
+  MONITOR_WAIT_TIMEOUT_HOURS,
   effectivePipelineConfig,
 } from './defaults.js';
 import {
@@ -292,6 +293,7 @@ export class PipelineRunner extends EventEmitter {
     const startedAt = new Date().toISOString();
 
     let ok = false;
+    let wait = false;
     let output = '';
     let error: string | undefined;
     let prompt: string | undefined;
@@ -309,6 +311,7 @@ export class PipelineRunner extends EventEmitter {
         project,
       );
       ok = res.ok;
+      wait = res.wait ?? false;
       output = res.output;
       error = res.error;
       prompt = res.prompt;
@@ -316,11 +319,26 @@ export class PipelineRunner extends EventEmitter {
       session = res.session;
     }
 
+    // Backstop: a machine that only ever WAITs (e.g. an MR nobody reviews)
+    // eventually surfaces as a failure instead of ticking forever.
+    let waitTimeout = false;
+    if (ok && wait) {
+      const stageStartedAt = item.stages[machineKey]?.startedAt;
+      const waitedMs = stageStartedAt ? Date.now() - new Date(stageStartedAt).getTime() : 0;
+      if (waitedMs > MONITOR_WAIT_TIMEOUT_HOURS * 3_600_000) {
+        waitTimeout = true;
+        ok = false;
+        wait = false;
+        error = `monitor gave up after waiting ${Math.round(waitedMs / 3_600_000)}h at ${machineKey}`;
+      }
+    }
+
     const finishedAt = new Date().toISOString();
+    const runStatus = ok ? (wait ? ('waiting' as const) : ('success' as const)) : ('failed' as const);
     await appendStageRun(this.store.paths, {
       workItemId: item.id,
       stage: machineKey,
-      status: ok ? 'success' : 'failed',
+      status: runStatus,
       startedAt,
       finishedAt,
       ...(prompt !== undefined ? { prompt } : {}),
@@ -332,12 +350,33 @@ export class PipelineRunner extends EventEmitter {
       item,
       machineKey,
       machineName: machine.name,
-      status: ok ? 'success' : 'failed',
+      status: runStatus,
       startedAt,
       finishedAt,
       ...(summary !== undefined ? { summary } : {}),
       ...(error !== undefined ? { error } : {}),
     });
+
+    if (ok && wait) {
+      // Still pending (e.g. waiting on reviewers or a running CI pipeline):
+      // record the tick and keep monitoring. WAIT breaks a consecutive-pass
+      // streak — irrelevant at maxChecks 1, correct for soak-style machines.
+      const ticks = (item.stages[machineKey]?.waitTicks ?? 0) + 1;
+      await this.updateItem(id, (it) => {
+        it.stages[machineKey] = {
+          ...it.stages[machineKey],
+          status: it.stages[machineKey]?.status ?? 'running',
+          checksPassed: 0,
+          waitTicks: ticks,
+          lastCheckAt: finishedAt,
+          output: truncateOutput(output),
+          ...(summary !== undefined ? { summary } : {}),
+        };
+        if (session) it.sessions = { ...it.sessions, [session.provider]: session.sessionId };
+      });
+      console.log(`[pipeline] "${item.title}" (${id.slice(0, 8)}) waiting at ${machineKey} (tick ${ticks})`);
+      return;
+    }
 
     if (ok) {
       const passed = (item.stages[machineKey]?.checksPassed ?? 0) + 1;
@@ -348,6 +387,7 @@ export class PipelineRunner extends EventEmitter {
           it.stages[machineKey] = {
             status: 'success',
             checksPassed: passed,
+            lastCheckAt: finishedAt,
             output: truncateOutput(output),
             ...(summary !== undefined ? { summary } : {}),
             finishedAt: new Date().toISOString(),
@@ -377,6 +417,7 @@ export class PipelineRunner extends EventEmitter {
             ...it.stages[machineKey],
             status: it.stages[machineKey]?.status ?? 'running',
             checksPassed: passed,
+            lastCheckAt: finishedAt,
             output: truncateOutput(output),
             ...(summary !== undefined ? { summary } : {}),
           };
@@ -391,6 +432,7 @@ export class PipelineRunner extends EventEmitter {
       it.stages[machineKey] = {
         ...it.stages[machineKey],
         status: 'failed',
+        lastCheckAt: finishedAt,
         output: truncateOutput(output),
         ...(summary !== undefined ? { summary } : {}),
         ...(error !== undefined ? { error } : {}),
@@ -400,9 +442,11 @@ export class PipelineRunner extends EventEmitter {
     });
     console.warn(`[pipeline] "${item.title}" (${id.slice(0, 8)}) monitor check failed: ${error ?? 'unknown'}`);
 
-    // Auto-file a defect back at the top of the line. Loop guard: defects
-    // found while monitoring a defect fix don't file further defects.
-    if (failed && item.source !== 'monitor') {
+    // Auto-file a defect back at the top of the line. Loop guards: defects
+    // found while monitoring a defect fix don't file further defects, and a
+    // wait-timeout (gave up waiting on humans) surfaces red without spawning
+    // a defect item that would re-run the whole line.
+    if (failed && item.source !== 'monitor' && !waitTimeout) {
       await this.enqueue({
         projectId: item.projectId,
         title: `Defect: ${item.title}`.slice(0, TITLE_LIMIT + 8),
@@ -542,6 +586,12 @@ export class PipelineRunner extends EventEmitter {
           summary = res.summary ?? fallbackSummary(res.output);
           error = res.error;
           session = res.session;
+          if (ok && res.wait) {
+            // WAIT only means something inside a monitor loop; on the linear
+            // path it would stall the item, so surface it as a failure.
+            ok = false;
+            error = 'machine reported MACHINE_RESULT: WAIT but has no monitor loop';
+          }
         } catch (err) {
           error = err instanceof Error ? err.message : String(err);
         }

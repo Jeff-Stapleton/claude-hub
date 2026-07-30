@@ -17,7 +17,7 @@ export interface StageRunRecord {
   workItemId: string;
   /** Machine key (pre-v7: stage id — same values for built-ins). */
   stage: string;
-  status: 'success' | 'failed' | 'interrupted';
+  status: 'success' | 'failed' | 'interrupted' | 'waiting';
   startedAt: ISODateString;
   finishedAt: ISODateString;
   prompt?: string;
@@ -42,7 +42,7 @@ export async function readWorkItemStageRuns(
   return readJsonl<StageRunRecord>(paths.workItemHistoryFile(workItemId), limit);
 }
 
-export type MachineRunEventStatus = 'success' | 'failed' | 'interrupted' | 'skipped';
+export type MachineRunEventStatus = 'success' | 'failed' | 'interrupted' | 'skipped' | 'waiting';
 
 /**
  * One machine execution (or skip) on a work item, denormalized at write time
@@ -88,6 +88,17 @@ export async function archiveWorkItem(paths: HubPaths, item: WorkItem): Promise<
   const file = paths.pipelineArchiveFile(item.projectId);
   await mkdir(dirname(file), { recursive: true });
   await appendFile(file, JSON.stringify(item) + '\n', 'utf8');
+}
+
+/** Find one archived work item by id in a project's archive (newest match wins). */
+export async function findArchivedWorkItem(
+  paths: HubPaths,
+  projectId: string,
+  workItemId: string,
+  limit = 200,
+): Promise<WorkItem | undefined> {
+  const items = await readJsonl<WorkItem>(paths.pipelineArchiveFile(projectId), limit);
+  return items.find((it) => it.id === workItemId);
 }
 
 /** Most recent N archived work items for a project, newest-first. */

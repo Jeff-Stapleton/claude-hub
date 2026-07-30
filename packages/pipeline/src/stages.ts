@@ -15,6 +15,7 @@ import {
   MACHINE_FAIL_MARKER,
   MACHINE_PASS_MARKER,
   MACHINE_SUMMARY_INSTRUCTION,
+  MACHINE_WAIT_MARKER,
   findMachineTemplate,
 } from './defaults.js';
 
@@ -36,6 +37,11 @@ export interface ExecuteStageResult {
   prompt?: string;
   /** Agent-reported MACHINE_SUMMARY, when present. Not stripped from output. */
   summary?: string;
+  /**
+   * The agent reported MACHINE_RESULT: WAIT — still pending, check again.
+   * Only meaningful for machines in a monitor loop; ok is true alongside it.
+   */
+  wait?: boolean;
   error?: string;
   /** Provider session id to persist on the item, when an agent run happened. */
   session?: { provider: AgentProviderId; sessionId: string };
@@ -75,6 +81,7 @@ export async function executeMachine(
   const outputs: string[] = [];
   let prompt: string | undefined;
   let summary: string | undefined;
+  let wait = false;
   let session: ExecuteStageResult['session'];
   const tools = resolveToolAssignments(deps.store, machine, project);
 
@@ -106,17 +113,18 @@ export async function executeMachine(
     session = { provider, sessionId: result.sessionId };
     summary = extractMachineSummary(result.text);
 
-    const markerError = checkResultMarker(machine.resultCheck, result.text);
-    if (markerError) {
+    const verdict = checkResultMarker(machine.resultCheck, result.text);
+    if (verdict.verdict === 'fail') {
       return {
         ok: false,
         output: outputs.join('\n\n'),
         prompt,
         ...(summary !== undefined ? { summary } : {}),
-        error: markerError,
+        error: verdict.error,
         session,
       };
     }
+    if (verdict.verdict === 'wait') wait = true;
   }
 
   if (hasCommands) {
@@ -146,6 +154,7 @@ export async function executeMachine(
     output: outputs.join('\n\n'),
     ...(prompt !== undefined ? { prompt } : {}),
     ...(summary !== undefined ? { summary } : {}),
+    ...(wait ? { wait: true } : {}),
     ...(session ? { session } : {}),
   };
 }
@@ -321,27 +330,34 @@ export function buildContext(
   return { request: item.request, title: item.title, source: item.source, stages, previous };
 }
 
+export type ResultVerdict = { verdict: 'pass' | 'wait' } | { verdict: 'fail'; error: string };
+
 /**
  * resultCheck machines self-report via marker lines. 'strict' requires an
  * explicit PASS (an unattended health check must be unambiguous); 'lenient'
  * fails only on an explicit FAIL, so custom templates without the marker
  * convention still work. Legacy TEST_RESULT/MONITOR_RESULT markers are
  * honored for prompts migrated from pre-v7 stores.
+ *
+ * WAIT is the third outcome for machines in a monitor loop ("still pending —
+ * check again next tick"). Precedence is FAIL > WAIT > strict-missing-PASS,
+ * so mixed output stays conservative.
  */
 export function checkResultMarker(
   mode: 'strict' | 'lenient' | undefined,
   text: string,
-): string | undefined {
-  if (!mode) return undefined;
+): ResultVerdict {
+  if (!mode) return { verdict: 'pass' };
   const failed =
     text.includes(MACHINE_FAIL_MARKER) || LEGACY_FAIL_MARKERS.some((m) => text.includes(m));
-  if (failed) return `machine reported ${MACHINE_FAIL_MARKER}`;
+  if (failed) return { verdict: 'fail', error: `machine reported ${MACHINE_FAIL_MARKER}` };
+  if (text.includes(MACHINE_WAIT_MARKER)) return { verdict: 'wait' };
   if (mode === 'strict') {
     const passed =
       text.includes(MACHINE_PASS_MARKER) || LEGACY_PASS_MARKERS.some((m) => text.includes(m));
-    if (!passed) return `machine did not report ${MACHINE_PASS_MARKER}`;
+    if (!passed) return { verdict: 'fail', error: `machine did not report ${MACHINE_PASS_MARKER}` };
   }
-  return undefined;
+  return { verdict: 'pass' };
 }
 
 /** Cap for stored machine summaries (marker-parsed or fallback-derived). */

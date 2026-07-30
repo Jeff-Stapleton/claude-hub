@@ -78,4 +78,21 @@ export class GitlabClient {
     if (text.length === 0) return undefined as T;
     return JSON.parse(text) as T;
   }
+
+  /** Like request(), but returns the raw response body as scrubbed text —
+   * for endpoints that serve plain text, such as CI job traces. */
+  async requestText(method: string, path: string): Promise<string> {
+    if (!this.token) throw new Error(MISSING_TOKEN_HINT);
+    const res = await this.fetchFn(`${this.baseUrl}/api/v4${path}`, {
+      method,
+      headers: { 'PRIVATE-TOKEN': this.token },
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      throw new Error(
+        this.scrub(`GitLab API ${method} ${path} failed (${res.status}): ${text.slice(0, 500)}`),
+      );
+    }
+    return this.scrub(text);
+  }
 }

@@ -200,7 +200,15 @@ export interface TriggerRun {
  * templates. The six classic stages survive as built-in templates; users
  * can install any mix, in any order, including duplicates.
  */
-export const BUILTIN_MACHINE_SLUGS = ['intake', 'spec', 'code', 'test', 'deploy', 'monitor'] as const;
+export const BUILTIN_MACHINE_SLUGS = [
+  'intake',
+  'spec',
+  'code',
+  'test',
+  'code-review',
+  'deploy',
+  'monitor',
+] as const;
 export type BuiltinMachineSlug = (typeof BUILTIN_MACHINE_SLUGS)[number];
 
 /** Stable template id for a built-in machine template. */
@@ -347,6 +355,10 @@ export interface StageResult {
   error?: string;
   /** Consecutive passing checks so far. Machines with a monitor loop only. */
   checksPassed?: number;
+  /** WAIT ticks recorded so far. Machines with a monitor loop only. */
+  waitTicks?: number;
+  /** When the most recent monitor check ran (any outcome). */
+  lastCheckAt?: ISODateString;
 }
 
 export interface WorkItem {

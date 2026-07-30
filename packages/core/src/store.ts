@@ -387,6 +387,7 @@ const BUILTIN_MACHINE_NAMES: Record<BuiltinMachineSlug, string> = {
   spec: 'Spec',
   code: 'Code',
   test: 'Test',
+  'code-review': 'Code Review',
   deploy: 'Deploy',
   monitor: 'Monitor',
 };

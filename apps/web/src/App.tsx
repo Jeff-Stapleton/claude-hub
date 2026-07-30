@@ -59,7 +59,7 @@ export function App(): JSX.Element {
       )}
       {scene === 'activity' && (
         <SubScreen title="Activity" onBack={() => navigate('workshop')}>
-          <ActivityTab />
+          <ActivityTab state={data} navigate={navigate} />
         </SubScreen>
       )}
     </Scene>

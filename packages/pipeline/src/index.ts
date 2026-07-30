@@ -19,6 +19,7 @@ export {
   appendMachineRunEvent,
   appendStageRun,
   archiveWorkItem,
+  findArchivedWorkItem,
   readArchivedWorkItems,
   readRecentMachineRunEvents,
   readWorkItemStageRuns,

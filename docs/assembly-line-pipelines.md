@@ -131,6 +131,22 @@ Key behaviors and the reasoning behind them:
   fails the item **and auto-files a defect work item** (`source: 'monitor'`, `sourceRef` = the
   failed item's id) at the top of the line — with a loop guard: monitor-sourced items never file
   further defects.
+- **WAIT — the third marker.** A machine in a monitor loop may end a tick with
+  `MACHINE_RESULT: WAIT` ("still pending — check again next tick"): the tick is logged as
+  `waiting`, `waitTicks` increments, the consecutive-pass streak resets, and the item stays
+  `monitoring`. Backstop: after `MONITOR_WAIT_TIMEOUT_HOURS` (72h) of waiting the item fails
+  visibly, but a wait-timeout never files a defect. Outside a monitor loop (linear machines,
+  project-monitor checks) WAIT is coerced to a failure.
+- **Immediate first check.** A freshly parked monitoring machine (no `lastCheckAt` on its stage)
+  gets its first check at park time instead of one interval later — this is what makes the Code
+  Review station open its MR seconds after the previous machine finishes.
+- **Code Review station** (`builtin-code-review`): an MR babysitter built on the monitor loop
+  (`intervalMinutes: 5, maxChecks: 1`, strict check, `mcpServers: ['bundled-gitlab']`,
+  `requiredEnv: ['GITLAB_TOKEN']`). Tick 1 pushes the branch and opens a GitLab MR for the work
+  item; later ticks triage reviewer discussions (fix or respectfully decline — always reply, then
+  resolve), diagnose failed CI pipelines from job logs and push fixes, and direct-merge once the
+  pipeline is green and every discussion is resolved (it never arms GitLab auto-merge). PASS only
+  when the MR actually merged; one MR per work item.
 - **Shell commands do NOT go through agent-runner.** That boundary exists for provider CLIs;
   `commands.ts` is generic `child_process` execution in the project cwd.
 

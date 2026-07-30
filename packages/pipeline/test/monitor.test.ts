@@ -23,7 +23,7 @@ function monitorPipeline(intervalMinutes: number): PipelineConfig {
   };
 }
 
-function monitoringItem(id: string): WorkItem {
+function monitoringItem(id: string, lastCheckAt?: string): WorkItem {
   return {
     id,
     projectId: 'proj-1',
@@ -33,7 +33,11 @@ function monitoringItem(id: string): WorkItem {
     status: 'monitoring',
     currentStage: 'monitor',
     stages: {
-      monitor: { status: 'running', checksPassed: 0 },
+      monitor: {
+        status: 'running',
+        checksPassed: 0,
+        ...(lastCheckAt !== undefined ? { lastCheckAt } : {}),
+      },
     },
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -61,19 +65,68 @@ describe('MonitorScheduler', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('fires checks on the configured interval for monitoring items', async () => {
+  it('fires an immediate first check, then checks on the configured interval', async () => {
     await store.update('pipelines', [monitorPipeline(1)]);
     await store.update('workItems', [monitoringItem('wi-1')]);
 
     scheduler = new MonitorScheduler(store, runner);
     scheduler.start();
 
-    await vi.advanceTimersByTimeAsync(60_000);
+    // Never-checked machine gets its first check at park time.
     expect(runMonitorCheck).toHaveBeenCalledTimes(1);
     expect(runMonitorCheck).toHaveBeenCalledWith('wi-1');
 
     await vi.advanceTimersByTimeAsync(60_000);
     expect(runMonitorCheck).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runMonitorCheck).toHaveBeenCalledTimes(3);
+  });
+
+  it('skips the immediate check when the machine was already checked', async () => {
+    await store.update('pipelines', [monitorPipeline(1)]);
+    await store.update('workItems', [monitoringItem('wi-1', new Date().toISOString())]);
+
+    scheduler = new MonitorScheduler(store, runner);
+    scheduler.start();
+
+    expect(runMonitorCheck).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(runMonitorCheck).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not re-fire the immediate check on unrelated reconciles', async () => {
+    await store.update('pipelines', [monitorPipeline(1)]);
+    await store.update('workItems', [monitoringItem('wi-1')]);
+
+    // Simulate a real check: stamp lastCheckAt like runMonitorCheck does.
+    runMonitorCheck.mockImplementation(async (id: string) => {
+      await store.update('workItems', (items) =>
+        items.map((it) =>
+          it.id === id
+            ? {
+                ...it,
+                stages: {
+                  ...it.stages,
+                  monitor: { ...it.stages['monitor']!, lastCheckAt: new Date().toISOString() },
+                },
+              }
+            : it,
+        ),
+      );
+    });
+
+    scheduler = new MonitorScheduler(store, runner);
+    scheduler.start();
+    await vi.advanceTimersByTimeAsync(0); // let the immediate check settle
+
+    expect(runMonitorCheck).toHaveBeenCalledTimes(1);
+
+    // An unrelated pipelines change triggers reconcile; no second immediate check.
+    await store.update('pipelines', [monitorPipeline(1)]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(runMonitorCheck).toHaveBeenCalledTimes(1);
+    runMonitorCheck.mockResolvedValue(undefined);
   });
 
   it('disarms when the item leaves monitoring', async () => {
@@ -83,13 +136,14 @@ describe('MonitorScheduler', () => {
     scheduler = new MonitorScheduler(store, runner);
     scheduler.start();
 
+    expect(runMonitorCheck).toHaveBeenCalledTimes(1); // immediate first check
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(runMonitorCheck).toHaveBeenCalledTimes(1);
+    expect(runMonitorCheck).toHaveBeenCalledTimes(2);
 
     // Item completes -> removed from live store -> reconcile clears the timer.
     await store.update('workItems', []);
     await vi.advanceTimersByTimeAsync(180_000);
-    expect(runMonitorCheck).toHaveBeenCalledTimes(1);
+    expect(runMonitorCheck).toHaveBeenCalledTimes(2);
   });
 
   it('does not overlap checks when one is still in flight', async () => {
@@ -102,7 +156,8 @@ describe('MonitorScheduler', () => {
     scheduler = new MonitorScheduler(store, runner);
     scheduler.start();
 
-    await vi.advanceTimersByTimeAsync(180_000); // 3 ticks, first check never resolves
+    // Immediate check fires and never resolves; interval ticks are skipped.
+    await vi.advanceTimersByTimeAsync(180_000);
     expect(runMonitorCheck).toHaveBeenCalledTimes(1);
     releaseCheck();
   });

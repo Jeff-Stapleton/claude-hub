@@ -26,9 +26,22 @@ describe('machine template listings', () => {
   it('hides the retired monitor builtin from the installable gallery', () => {
     const installable = listInstallableMachineTemplates(store);
     expect(installable.some((t) => t.id === builtinTemplateId('monitor'))).toBe(false);
-    // The other five classics are still offered.
-    for (const slug of ['intake', 'spec', 'code', 'test', 'deploy'] as const) {
+    // The other builtins are still offered.
+    for (const slug of ['intake', 'spec', 'code', 'test', 'code-review', 'deploy'] as const) {
       expect(installable.some((t) => t.id === builtinTemplateId(slug))).toBe(true);
+    }
+  });
+
+  it('ships the code-review builtin as an MR-babysitting monitor machine', () => {
+    const template = findMachineTemplate(store, builtinTemplateId('code-review'));
+    expect(template?.slug).toBe('code-review');
+    expect(template?.resultCheck).toBe('strict');
+    expect(template?.mcpServers).toEqual(['bundled-gitlab']);
+    expect(template?.requiredEnv).toEqual(['GITLAB_TOKEN']);
+    expect(template?.monitor).toEqual({ intervalMinutes: 5, maxChecks: 1 });
+    // The lifecycle prompt covers all three self-report outcomes.
+    for (const marker of ['MACHINE_RESULT: PASS', 'MACHINE_RESULT: WAIT', 'MACHINE_RESULT: FAIL']) {
+      expect(template?.promptTemplate).toContain(marker);
     }
   });
 

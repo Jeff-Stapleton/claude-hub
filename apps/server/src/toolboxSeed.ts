@@ -101,9 +101,9 @@ const GITLAB_MCP_SERVER_PATH = resolve(
 const BUNDLED_MCP_SERVERS: BundledMcpServerDef[] = [
   {
     slug: 'gitlab',
-    version: 1,
+    version: 2,
     description:
-      'GitLab workflow tools: clone repos, create/push branches, and create, list, view, and approve merge requests. Defaults to gitlab.com; set GITLAB_URL for self-hosted.',
+      'GitLab workflow tools: clone repos, create/push branches, create/list/view/approve merge requests, MR discussions (list, reply, resolve), CI pipelines/jobs/logs, merge, and rebase. Defaults to gitlab.com; set GITLAB_URL for self-hosted.',
     tags: ['git', 'gitlab'],
     requiredEnv: ['GITLAB_TOKEN'],
     transport: {

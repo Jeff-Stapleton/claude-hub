@@ -129,11 +129,19 @@ async function runAgentCheck(
   if (!result.ok) {
     return { ok: false, output: '', error: result.error, durationMs: Date.now() - started };
   }
-  const markerError = checkResultMarker('strict', result.text);
+  const verdict = checkResultMarker('strict', result.text);
+  // WAIT has no meaning for a project check — treat it as a failure so a
+  // misconfigured prompt surfaces instead of silently passing.
+  const error =
+    verdict.verdict === 'fail'
+      ? verdict.error
+      : verdict.verdict === 'wait'
+        ? 'agent reported MACHINE_RESULT: WAIT — WAIT is only valid inside a machine monitor loop'
+        : undefined;
   return {
-    ok: markerError === undefined,
+    ok: error === undefined,
     output: truncateCheckOutput(result.text),
-    ...(markerError !== undefined ? { error: markerError } : {}),
+    ...(error !== undefined ? { error } : {}),
     durationMs: Date.now() - started,
   };
 }

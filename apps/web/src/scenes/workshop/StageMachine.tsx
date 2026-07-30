@@ -20,6 +20,7 @@ const VARIANTS: Record<
   spec: { h: 1.25, top: '#4f5f63', right: '#3d4a4e', left: '#2a3438' },
   code: { h: 1.45, top: '#65464b', right: '#51363a', left: '#39262a' },
   test: { h: 1.35, top: '#4f6350', right: '#3d4e3f', left: '#2a382c' },
+  'code-review': { h: 1.4, top: '#5a4f63', right: '#463d4e', left: '#312a38' },
   deploy: { h: 1.55, top: '#5f5563', right: '#4a424e', left: '#343038' },
   monitor: { h: 1.3, top: '#535f4a', right: '#414a3a', left: '#2d3428' },
 };

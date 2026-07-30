@@ -74,6 +74,17 @@ stable `bundled-<slug>` ids. Bump `version:` in a skill's frontmatter to
 reseed it on next boot. Bundled skills are read-only in the UI — "duplicate"
 copies one into an editable user skill.
 
+## Bundled MCP servers
+
+`packages/gitlab-mcp` ships as the `bundled-gitlab` stdio server (seeded the
+same way, version-bumped in `BUNDLED_MCP_SERVERS` — currently v2). Tool set:
+clone/branch/push (git CLI with per-invocation token injection), and via the
+REST v4 API: create/list/view/approve merge requests, MR discussions (list,
+reply, resolve), CI pipelines, pipeline jobs, job logs (tail-truncated),
+merge, and rebase. Requires the `GITLAB_TOKEN` vault key; `GITLAB_URL`
+optionally points at a self-hosted instance. The built-in Code Review machine
+template assigns this server.
+
 ## Notes / caveats
 
 - `--plugin-dir` and `--strict-mcp-config` require a recent Claude Code CLI

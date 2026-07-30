@@ -93,7 +93,7 @@ export interface TriggerRunRecord {
   error?: string;
 }
 
-export type MachineRunStatus = 'success' | 'failed' | 'interrupted' | 'skipped';
+export type MachineRunStatus = 'success' | 'failed' | 'interrupted' | 'skipped' | 'waiting';
 
 /** Mirrors the server's MachineRunEvent (denormalized machine-run log). */
 export interface MachineRunEvent {
@@ -109,6 +109,26 @@ export interface MachineRunEvent {
   finishedAt: string;
   summary?: string;
   error?: string;
+}
+
+/** Mirrors the server's StageRunRecord (full per-stage history JSONL). */
+export interface StageRunRecord {
+  workItemId: string;
+  stage: string;
+  status: 'success' | 'failed' | 'interrupted' | 'waiting';
+  startedAt: string;
+  finishedAt: string;
+  prompt?: string;
+  output?: string;
+  summary?: string;
+  error?: string;
+}
+
+/** Response of GET /api/work-items/:id — works for live and archived items. */
+export interface WorkItemDetail {
+  item: WorkItem;
+  stageRuns: StageRunRecord[];
+  archived: boolean;
 }
 
 export interface TriggerActivityEntry {
@@ -264,6 +284,11 @@ export const api = {
       method: 'POST',
       body: '{}',
     }),
+  getWorkItem: (id: string, projectId?: string) =>
+    req<WorkItemDetail>(
+      `/api/work-items/${encodeURIComponent(id)}` +
+        (projectId ? `?projectId=${encodeURIComponent(projectId)}` : ''),
+    ),
   createWorkItem: (projectId: string, body: { request: string; title?: string }) =>
     req<WorkItem>(`/api/projects/${encodeURIComponent(projectId)}/work-items`, {
       method: 'POST',

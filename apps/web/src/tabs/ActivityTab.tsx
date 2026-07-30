@@ -1,18 +1,30 @@
 import { useQuery } from '@tanstack/react-query';
-import { api, type ActivityEntry } from '../api.js';
+import { api, type TriggerActivityEntry } from '../api.js';
+import type { SceneId } from '../scenes/useSceneRouter.js';
+import type { UIState } from '../types.js';
+import { groupActivity } from './activityGroups.js';
+import { LineRunCard } from './LineRunCard.jsx';
 
 /**
- * Unified activity feed: trigger runs interleaved with machine runs from
- * the assembly lines — channel messages will land here in a later version.
- * The UI still calls it "Activity" rather than "Runs" so the mental model
- * is stable.
+ * Unified activity feed: trigger runs interleaved with line runs from the
+ * assembly lines — channel messages will land here in a later version.
+ * Machine-run events are grouped into one card per work item so a line's
+ * progress ("stage k of n", finished or not, retry) reads at a glance.
  */
-export function ActivityTab(): JSX.Element {
+export function ActivityTab({
+  state,
+  navigate,
+}: {
+  state: UIState;
+  navigate: (next: SceneId, param?: string) => void;
+}): JSX.Element {
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['activity'],
     queryFn: api.listActivity,
     refetchInterval: 10_000,
   });
+
+  const grouped = data ? groupActivity(data) : [];
 
   return (
     <section>
@@ -27,49 +39,26 @@ export function ActivityTab(): JSX.Element {
         <p>Loading…</p>
       ) : error ? (
         <p style={{ color: 'crimson' }}>{String(error)}</p>
-      ) : !data || data.length === 0 ? (
+      ) : grouped.length === 0 ? (
         <p style={{ opacity: 0.7, marginTop: 16 }}>
           No activity yet. Fire a trigger or enqueue a work request on an assembly line
           to see entries here.
         </p>
       ) : (
         <ul style={{ listStyle: 'none', padding: 0, marginTop: 16 }}>
-          {data.map((e) =>
-            e.kind === 'trigger-run' ? (
-              <li key={e.run.id} style={entry}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <StatusDot color={statusColor(e.run.status)} />
-                  <strong>{e.triggerName}</strong>
-                  <span style={{ opacity: 0.5, fontSize: 12 }}>
-                    {new Date(e.run.startedAt).toLocaleString()}
-                  </span>
-                </div>
-                <div style={promptLine}>{e.run.prompt}</div>
-                {e.run.transcript ? (
-                  <div style={transcript}>{e.run.transcript}</div>
-                ) : e.run.error ? (
-                  <div style={{ ...transcript, color: 'salmon' }}>{e.run.error}</div>
-                ) : null}
-              </li>
+          {grouped.map((entry) =>
+            entry.kind === 'trigger-run' ? (
+              <TriggerRunEntry key={entry.run.id} entry={entry} />
             ) : (
-              <li key={e.event.id} style={entry}>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <StatusDot color={statusColor(e.event.status)} />
-                  <strong>
-                    {e.event.projectName} · {e.event.machineName}
-                  </strong>
-                  <span style={{ opacity: 0.6, fontSize: 12 }}>{e.event.status}</span>
-                  <span style={{ opacity: 0.5, fontSize: 12 }}>
-                    {new Date(e.event.startedAt).toLocaleString()}
-                  </span>
-                </div>
-                <div style={promptLine}>{e.event.workItemTitle}</div>
-                {e.event.summary ? (
-                  <div style={transcript}>{e.event.summary}</div>
-                ) : e.event.error ? (
-                  <div style={{ ...transcript, color: 'salmon' }}>{e.event.error}</div>
-                ) : null}
-              </li>
+              <LineRunCard
+                key={entry.workItemId}
+                group={entry}
+                machines={
+                  state.pipelines?.find((p) => p.projectId === entry.projectId)?.machines
+                }
+                liveItem={state.workItems?.find((it) => it.id === entry.workItemId)}
+                navigate={navigate}
+              />
             ),
           )}
         </ul>
@@ -78,8 +67,28 @@ export function ActivityTab(): JSX.Element {
   );
 }
 
+function TriggerRunEntry({ entry }: { entry: TriggerActivityEntry }): JSX.Element {
+  return (
+    <li style={entryStyle}>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <StatusDot color={statusColor(entry.run.status)} />
+        <strong>{entry.triggerName}</strong>
+        <span style={{ opacity: 0.5, fontSize: 12 }}>
+          {new Date(entry.run.startedAt).toLocaleString()}
+        </span>
+      </div>
+      <div style={promptLine}>{entry.run.prompt}</div>
+      {entry.run.transcript ? (
+        <div style={transcript}>{entry.run.transcript}</div>
+      ) : entry.run.error ? (
+        <div style={{ ...transcript, color: 'salmon' }}>{entry.run.error}</div>
+      ) : null}
+    </li>
+  );
+}
+
 function statusColor(
-  status: 'running' | 'success' | 'error' | 'failed' | 'interrupted' | 'skipped',
+  status: 'running' | 'success' | 'error' | 'failed' | 'interrupted' | 'skipped' | 'waiting',
 ): string {
   switch (status) {
     case 'success':
@@ -89,6 +98,7 @@ function statusColor(
       return 'crimson';
     case 'running':
     case 'interrupted':
+    case 'waiting':
       return '#fa0';
     case 'skipped':
       return '#888';
@@ -109,7 +119,7 @@ function StatusDot({ color }: { color: string }): JSX.Element {
   );
 }
 
-const entry: React.CSSProperties = {
+const entryStyle: React.CSSProperties = {
   borderBottom: '1px solid #222',
   padding: '10px 0',
 };

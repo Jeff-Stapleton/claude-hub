@@ -51,17 +51,19 @@ export class MonitorScheduler {
       const minutes = machine?.monitor?.intervalMinutes ?? DEFAULT_MONITOR_INTERVAL_MINUTES;
       const intervalMs = Math.max(1, minutes) * 60_000;
 
+      // A freshly parked machine has never been checked — fire the first
+      // check now instead of one full interval from now (an MR-babysitter
+      // machine creates its MR on this tick). Self-deduplicating: every
+      // runMonitorCheck outcome stamps lastCheckAt, so the reconcile
+      // triggered by that check's own store write won't fire again.
+      if (item.stages[item.currentStage]?.lastCheckAt === undefined && !this.inFlight.has(item.id)) {
+        this.runCheck(item.id);
+      }
+
       if (this.intervals.get(item.id) === intervalMs) continue; // already armed
 
       this.unschedule(item.id);
-      const timer = setInterval(() => {
-        if (this.inFlight.has(item.id)) return;
-        this.inFlight.add(item.id);
-        void this.runner
-          .runMonitorCheck(item.id)
-          .catch((err) => console.error(`[pipeline] monitor check error for ${item.id}:`, err))
-          .finally(() => this.inFlight.delete(item.id));
-      }, intervalMs);
+      const timer = setInterval(() => this.runCheck(item.id), intervalMs);
       // Don't hold the process open just for monitor timers.
       timer.unref?.();
       this.timers.set(item.id, timer);
@@ -71,6 +73,16 @@ export class MonitorScheduler {
     for (const id of Array.from(this.timers.keys())) {
       if (!seen.has(id)) this.unschedule(id);
     }
+  }
+
+  /** One guarded check: overlapping ticks are skipped, errors logged. */
+  private runCheck(id: string): void {
+    if (this.inFlight.has(id)) return;
+    this.inFlight.add(id);
+    void this.runner
+      .runMonitorCheck(id)
+      .catch((err) => console.error(`[pipeline] monitor check error for ${id}:`, err))
+      .finally(() => this.inFlight.delete(id));
   }
 
   private unschedule(id: string): void {

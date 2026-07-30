@@ -7,9 +7,10 @@ import { runGit } from './git.js';
 import { makeTools } from './tools.js';
 
 /**
- * Stdio MCP server giving agents basic IC git functionality on GitLab:
- * clone, branch, push (git CLI with per-invocation token injection) and
- * create/list/view/approve merge requests (REST v4 API).
+ * Stdio MCP server giving agents IC git functionality on GitLab:
+ * clone, branch, push (git CLI with per-invocation token injection) and,
+ * via the REST v4 API: create/list/view/approve merge requests, MR
+ * discussions (list/reply/resolve), CI pipelines/jobs/logs, merge, rebase.
  *
  * Config comes from the transport env the hub injects at run time:
  *   GITLAB_TOKEN — required vault key; API tools fail with a readable hint

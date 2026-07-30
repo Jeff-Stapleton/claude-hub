@@ -300,6 +300,7 @@ export const TEMPLATE_META: Record<BuiltinMachineSlug, { label: string; blurb: s
   spec: { label: 'SPEC', blurb: 'plan the work' },
   code: { label: 'CODE', blurb: 'implement the change' },
   test: { label: 'TEST', blurb: 'validate the build' },
+  'code-review': { label: 'REVIEW', blurb: 'merge request babysitter' },
   deploy: { label: 'DEPLOY', blurb: 'ship it' },
   monitor: { label: 'MONITOR', blurb: 'watch production' },
 };

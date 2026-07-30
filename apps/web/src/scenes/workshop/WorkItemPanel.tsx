@@ -61,6 +61,7 @@ export function WorkItemPanel({
                 <span style={{ ...s.panelHint, marginLeft: 'auto' }}>
                   {result?.status ?? 'pending'}
                   {result?.checksPassed ? ` (${result.checksPassed} ok)` : ''}
+                  {result?.waitTicks ? ` (waiting ×${result.waitTicks})` : ''}
                 </span>
               </div>
             );

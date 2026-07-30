@@ -145,14 +145,22 @@ export interface OrchestratorState {
 // Pipelines / work items (assembly line)
 // ---------------------------------------------------------------------------
 
-/** The six built-in machine template slugs (fixed visual variants). */
-export type BuiltinMachineSlug = 'intake' | 'spec' | 'code' | 'test' | 'deploy' | 'monitor';
+/** The built-in machine template slugs (fixed visual variants). */
+export type BuiltinMachineSlug =
+  | 'intake'
+  | 'spec'
+  | 'code'
+  | 'test'
+  | 'code-review'
+  | 'deploy'
+  | 'monitor';
 
 export const BUILTIN_MACHINE_SLUGS: readonly BuiltinMachineSlug[] = [
   'intake',
   'spec',
   'code',
   'test',
+  'code-review',
   'deploy',
   'monitor',
 ];
@@ -297,6 +305,10 @@ export interface StageResult {
   summary?: string;
   error?: string;
   checksPassed?: number;
+  /** WAIT ticks recorded so far. Machines with a monitor loop only. */
+  waitTicks?: number;
+  /** When the most recent monitor check ran (any outcome). */
+  lastCheckAt?: string;
 }
 
 export interface WorkItem {

@@ -19,7 +19,7 @@ import {
   readWorkItemStageRuns,
 } from '../src/history.js';
 import { PipelineRunner, WorkItemStateError } from '../src/runner.js';
-import { extractMachineSummary, resolveTransportSecrets } from '../src/stages.js';
+import { checkResultMarker, extractMachineSummary, resolveTransportSecrets } from '../src/stages.js';
 
 const mockRun = vi.fn<AgentRunner['runProjectSession']>();
 const agentRunner: AgentRunner = { runProjectSession: mockRun };
@@ -608,6 +608,38 @@ describe('extractMachineSummary', () => {
   });
 });
 
+describe('checkResultMarker', () => {
+  it('passes, waits, and fails on the respective markers', () => {
+    expect(checkResultMarker('strict', 'ok\nMACHINE_RESULT: PASS')).toEqual({ verdict: 'pass' });
+    expect(checkResultMarker('strict', 'pending\nMACHINE_RESULT: WAIT')).toEqual({ verdict: 'wait' });
+    expect(checkResultMarker('strict', 'bad\nMACHINE_RESULT: FAIL broke')).toMatchObject({
+      verdict: 'fail',
+    });
+    expect(checkResultMarker('lenient', 'no markers at all')).toEqual({ verdict: 'pass' });
+    expect(checkResultMarker('lenient', 'MACHINE_RESULT: WAIT')).toEqual({ verdict: 'wait' });
+  });
+
+  it('FAIL beats WAIT in mixed output', () => {
+    expect(
+      checkResultMarker('strict', 'MACHINE_RESULT: WAIT\nMACHINE_RESULT: FAIL broke'),
+    ).toMatchObject({ verdict: 'fail' });
+  });
+
+  it('strict without PASS fails; no mode always passes', () => {
+    expect(checkResultMarker('strict', 'looks fine to me')).toMatchObject({ verdict: 'fail' });
+    expect(checkResultMarker(undefined, 'MACHINE_RESULT: FAIL ignored')).toEqual({
+      verdict: 'pass',
+    });
+  });
+
+  it('honors legacy markers', () => {
+    expect(checkResultMarker('strict', 'MONITOR_RESULT: PASS')).toEqual({ verdict: 'pass' });
+    expect(checkResultMarker('lenient', 'TEST_RESULT: FAIL flaky')).toMatchObject({
+      verdict: 'fail',
+    });
+  });
+});
+
 describe('PipelineRunner.runMonitorCheck', () => {
   let root: string;
   let store: Store;
@@ -756,6 +788,98 @@ describe('PipelineRunner.runMonitorCheck', () => {
     await runner.runMonitorCheck(item.id);
     expect(store.workItems().find((it) => it.id === item.id)?.status).toBe('failed');
     expect(store.workItems().filter((it) => it.id !== item.id)).toHaveLength(0);
+  });
+
+  it('keeps monitoring on a WAIT tick: waitTicks counted, no pass, no defect', async () => {
+    const item = await seedMonitoring('manual', 1);
+    mockRun.mockResolvedValue(okResult('MR open, pipeline running\nMACHINE_RESULT: WAIT'));
+
+    await runner.runMonitorCheck(item.id);
+
+    const waiting = store.workItems().find((it) => it.id === item.id);
+    expect(waiting?.status).toBe('monitoring');
+    expect(waiting?.stages.monitor?.status).toBe('running');
+    expect(waiting?.stages.monitor?.waitTicks).toBe(1);
+    expect(waiting?.stages.monitor?.checksPassed).toBe(0);
+    expect(waiting?.stages.monitor?.lastCheckAt).toBeDefined();
+    // No defect filed for a wait.
+    expect(store.workItems()).toHaveLength(1);
+
+    const events = await readRecentMachineRunEvents(store.paths);
+    expect(events[0]?.status).toBe('waiting');
+
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems()[0]?.stages.monitor?.waitTicks).toBe(2);
+  });
+
+  it('completes at maxChecks 1 after WAIT ticks once the check passes', async () => {
+    const item = await seedMonitoring('manual', 1);
+    mockRun
+      .mockResolvedValueOnce(okResult('MR open\nMACHINE_RESULT: WAIT'))
+      .mockResolvedValueOnce(okResult('merged!\nMACHINE_RESULT: PASS'));
+
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems()[0]?.status).toBe('monitoring');
+
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems()).toHaveLength(0);
+    const archived = await readArchivedWorkItems(store.paths, project.id);
+    expect(archived[0]?.status).toBe('done');
+    expect(archived[0]?.stages.monitor?.status).toBe('success');
+  });
+
+  it('WAIT resets a consecutive-pass streak', async () => {
+    const item = await seedMonitoring('manual', 2);
+    mockRun
+      .mockResolvedValueOnce(okResult('MACHINE_RESULT: PASS'))
+      .mockResolvedValueOnce(okResult('MACHINE_RESULT: WAIT'))
+      .mockResolvedValueOnce(okResult('MACHINE_RESULT: PASS'))
+      .mockResolvedValueOnce(okResult('MACHINE_RESULT: PASS'));
+
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems()[0]?.stages.monitor?.checksPassed).toBe(1);
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems()[0]?.stages.monitor?.checksPassed).toBe(0);
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems()[0]?.stages.monitor?.checksPassed).toBe(1);
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems()).toHaveLength(0);
+    const archived = await readArchivedWorkItems(store.paths, project.id);
+    expect(archived[0]?.status).toBe('done');
+  });
+
+  it('gives up after the wait-timeout backstop without filing a defect', async () => {
+    const item = await seedMonitoring('manual', 1);
+    const staleStart = new Date(Date.now() - 73 * 3_600_000).toISOString();
+    await store.update('workItems', (items) =>
+      items.map((it) =>
+        it.id === item.id
+          ? { ...it, stages: { ...it.stages, monitor: { ...it.stages['monitor']!, startedAt: staleStart } } }
+          : it,
+      ),
+    );
+    mockRun.mockResolvedValue(okResult('still nothing\nMACHINE_RESULT: WAIT'));
+
+    await runner.runMonitorCheck(item.id);
+
+    const failed = store.workItems().find((it) => it.id === item.id);
+    expect(failed?.status).toBe('failed');
+    expect(failed?.stages.monitor?.error).toMatch(/gave up after waiting/);
+    // Timed-out waits surface red but never spawn a defect item.
+    expect(store.workItems()).toHaveLength(1);
+  });
+
+  it('fails a linear (non-monitor) machine that reports WAIT', async () => {
+    // test has a lenient resultCheck, so the WAIT marker is parsed — but
+    // without a monitor loop it cannot mean anything except a stall.
+    await store.update('pipelines', [linePipeline([builtinMachine('test')])]);
+    mockRun.mockResolvedValue(okResult('not sure yet\nMACHINE_RESULT: WAIT'));
+
+    const item = await runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' });
+    const failed = await until(() =>
+      store.workItems().find((it) => it.id === item.id && it.status === 'failed'),
+    );
+    expect(failed.stages.test?.error).toMatch(/no monitor loop/);
   });
 });
 

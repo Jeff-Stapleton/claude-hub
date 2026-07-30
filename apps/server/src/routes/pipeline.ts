@@ -7,6 +7,7 @@ import {
 import {
   WorkItemStateError,
   effectivePipelineConfig,
+  findArchivedWorkItem,
   listMachineTemplates,
   readArchivedWorkItems,
   readWorkItemStageRuns,
@@ -108,12 +109,27 @@ export async function registerPipelineRoutes(
     },
   );
 
-  app.get<{ Params: { id: string } }>('/api/work-items/:id', async (req, reply) => {
-    const item = store.workItems().find((it) => it.id === req.params.id);
-    if (!item) return reply.code(404).send({ error: 'not found' });
-    const stageRuns = await readWorkItemStageRuns(store.paths, item.id);
-    return { item, stageRuns };
-  });
+  app.get<{ Params: { id: string }; Querystring: { projectId?: string } }>(
+    '/api/work-items/:id',
+    async (req, reply) => {
+      const live = store.workItems().find((it) => it.id === req.params.id);
+      let item = live;
+      if (!item) {
+        // Archives are keyed per project; a caller-supplied projectId skips
+        // the scan and still works when the project was later deleted.
+        const projectIds = req.query.projectId
+          ? [req.query.projectId]
+          : store.projects().map((p) => p.id);
+        for (const projectId of projectIds) {
+          item = await findArchivedWorkItem(store.paths, projectId, req.params.id);
+          if (item) break;
+        }
+      }
+      if (!item) return reply.code(404).send({ error: 'not found' });
+      const stageRuns = await readWorkItemStageRuns(store.paths, item.id);
+      return { item, stageRuns, archived: !live };
+    },
+  );
 
   app.post<{ Params: { id: string } }>('/api/work-items/:id/approve', async (req, reply) => {
     return handleTransition(reply, () => runner.approve(req.params.id));
