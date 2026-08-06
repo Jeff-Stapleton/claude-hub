@@ -113,10 +113,14 @@ packages/
   core/                state store + shared types + ~/.claude-hub/ paths
   cc-runner/           spawns claude -p with JSON envelope parsing
   cc-config-reader/    read-only views of ~/.claude/
+  agent-runner/        provider-agnostic run interface (claude, cursor)
+  pipeline/            factory pipeline: machines, stages, work items
   triggers/            cron + webhook runners + safe prompt templater
   channels/            Channel adapter interface + Discord
   orchestrator/        per-DM claude -p --resume + MCP config writer
   hub-mcp/             stdio MCP server the orchestrator uses
+  gitlab-mcp/          bundled GitLab MCP server (vault-backed token)
+  clickup-mcp/         bundled ClickUp MCP server (vault-backed token)
 apps/
   server/              Fastify + ws + CRUD routes + static bundle
   web/                 Vite React UI (5 tabs)

@@ -98,6 +98,11 @@ const GITLAB_MCP_SERVER_PATH = resolve(
   '../../../packages/gitlab-mcp/dist/server.js',
 );
 
+const CLICKUP_MCP_SERVER_PATH = resolve(
+  __dirname,
+  '../../../packages/clickup-mcp/dist/server.js',
+);
+
 const BUNDLED_MCP_SERVERS: BundledMcpServerDef[] = [
   {
     slug: 'gitlab',
@@ -110,6 +115,19 @@ const BUNDLED_MCP_SERVERS: BundledMcpServerDef[] = [
       type: 'stdio',
       command: 'node',
       args: [GITLAB_MCP_SERVER_PATH.replace(/\\/g, '/')],
+    },
+  },
+  {
+    slug: 'clickup',
+    version: 1,
+    description:
+      'ClickUp task tools: browse workspaces/spaces/folders/lists, list and search tasks with status/assignee/tag/custom-field filters (subtasks included), read task details, discover custom fields, and create/update tasks.',
+    tags: ['clickup', 'tasks', 'project-management'],
+    requiredEnv: ['CLICKUP_TOKEN'],
+    transport: {
+      type: 'stdio',
+      command: 'node',
+      args: [CLICKUP_MCP_SERVER_PATH.replace(/\\/g, '/')],
     },
   },
 ];

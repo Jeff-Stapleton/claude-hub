@@ -85,6 +85,18 @@ merge, and rebase. Requires the `GITLAB_TOKEN` vault key; `GITLAB_URL`
 optionally points at a self-hosted instance. The built-in Code Review machine
 template assigns this server.
 
+`packages/clickup-mcp` ships as the `bundled-clickup` stdio server (v1). Tool
+set (REST v2 API): browse workspaces/spaces/folders/lists, list tasks in a
+list and search tasks team-wide — both with status/assignee/tag/custom-field
+filters and `subtasks` support — read a single task (full detail, text fields
+truncated at 20k chars), discover a list's custom fields (ids, types, dropdown
+options), and create/update tasks including custom field values. List/search
+results are summaries; `clickup_get_task` returns full detail. Custom-field
+workflows start at `clickup_get_custom_fields` to find field and option ids.
+Requires the `CLICKUP_TOKEN` vault key (personal API token); `CLICKUP_API_URL`
+optionally overrides the API base. Nothing is workspace-specific — every
+team/space/list/field id is a tool argument, so any ClickUp workspace works.
+
 ## Notes / caveats
 
 - `--plugin-dir` and `--strict-mcp-config` require a recent Claude Code CLI

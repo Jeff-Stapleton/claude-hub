@@ -570,13 +570,22 @@ describe('seedBundledMcpServers', () => {
   it('the shipped defs seed cleanly', async () => {
     await seedBundledMcpServers(store); // default bundled defs
     const servers = store.toolbox().mcpServers;
-    expect(servers.length).toBeGreaterThanOrEqual(1);
+    expect(servers.length).toBeGreaterThanOrEqual(2);
     const gitlab = servers.find((s) => s.name === 'gitlab');
     expect(gitlab).toBeDefined();
     expect(gitlab!.id).toBe('bundled-gitlab');
     expect(gitlab!.source).toBe('bundled');
     expect(gitlab!.requiredEnv).toEqual(['GITLAB_TOKEN']);
     expect(gitlab!.transport.type).toBe('stdio');
+    const clickup = servers.find((s) => s.name === 'clickup');
+    expect(clickup).toBeDefined();
+    expect(clickup!.id).toBe('bundled-clickup');
+    expect(clickup!.source).toBe('bundled');
+    expect(clickup!.requiredEnv).toEqual(['CLICKUP_TOKEN']);
+    expect(clickup!.transport.type).toBe('stdio');
+    expect(
+      (clickup!.transport as { type: 'stdio'; args?: string[] }).args?.[0],
+    ).toMatch(/packages\/clickup-mcp\/dist\/server\.js$/);
   });
 });
 
