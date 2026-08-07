@@ -52,7 +52,7 @@ export function MonitorPanel({
   };
 
   return (
-    <foreignObject x={28} y={70} width={500} height={620}>
+    <foreignObject x={28} y={70} width={500} height={660}>
       <div style={s.panel}>
         <div style={s.panelTitle}>
           <span>
@@ -190,6 +190,7 @@ interface CheckDraft {
   timeout: string;
   url: string;
   expectedStatus: string;
+  cwd: string;
   command: string;
   prompt: string;
   provider: '' | AgentProviderId;
@@ -204,6 +205,7 @@ function newDraft(type: ProjectMonitorCheckType): CheckDraft {
     timeout: '',
     url: '',
     expectedStatus: '',
+    cwd: '',
     command: '',
     prompt: '',
     provider: '',
@@ -225,6 +227,7 @@ function draftFromCheck(check: ProjectMonitor['checks'][number]): CheckDraft {
       check.type === 'http' && check.expectedStatus !== undefined
         ? String(check.expectedStatus)
         : '',
+    cwd: check.type === 'command' ? (check.cwd ?? '') : '',
     command: check.type === 'command' ? check.command : '',
     prompt: check.type === 'agent' ? check.prompt : '',
     provider: check.type === 'agent' ? (check.provider ?? '') : '',
@@ -257,7 +260,12 @@ function checkFromDraft(draft: CheckDraft): MonitorCheckInput {
     };
   }
   if (draft.type === 'command') {
-    return { ...base, type: 'command', command: draft.command.trim() };
+    return {
+      ...base,
+      type: 'command',
+      ...(draft.cwd.trim() !== '' ? { cwd: draft.cwd.trim() } : {}),
+      command: draft.command.trim(),
+    };
   }
   return {
     ...base,
@@ -364,7 +372,15 @@ function CheckCard({
               style={{ ...s.panelInput, flex: 1, fontFamily: 'monospace' }}
             />
           </div>
-          <div style={s.panelHint}>runs in the project root; exit 0 = healthy</div>
+          <div style={s.panelRow}>
+            <input
+              value={draft.cwd}
+              onChange={(e) => onChange({ ...draft, cwd: e.target.value })}
+              placeholder="working dir, e.g. operations-back-end/readonly-api"
+              style={{ ...s.panelInput, flex: 1, fontFamily: 'monospace' }}
+            />
+          </div>
+          <div style={s.panelHint}>working dir is relative to the project root; blank uses root</div>
           <div style={s.panelRow}>
             <label style={inlineLabel}>
               every

@@ -6,6 +6,7 @@ import type {
 } from '@claude-hub/core';
 import type { ProjectMonitorScheduler } from '@claude-hub/pipeline';
 import { randomUUID } from 'node:crypto';
+import { isAbsolute, normalize } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 
 interface PutMonitorBody {
@@ -185,7 +186,14 @@ function parseMonitorBody(body: PutMonitorBody): ParsedMonitorBody | string {
       if (typeof c.command !== 'string' || !c.command.trim()) {
         return `${label}: command is required`;
       }
-      checks.push({ ...base, type: 'command', command: c.command.trim() });
+      const cwdResult = parseRelativeCwd(c.cwd);
+      if ('error' in cwdResult) return `${label}: ${cwdResult.error}`;
+      checks.push({
+        ...base,
+        type: 'command',
+        ...(cwdResult.cwd !== undefined ? { cwd: cwdResult.cwd } : {}),
+        command: c.command.trim(),
+      });
     } else {
       if (typeof c.prompt !== 'string' || !c.prompt.trim()) {
         return `${label}: prompt is required`;
@@ -207,4 +215,17 @@ function parseMonitorBody(body: PutMonitorBody): ParsedMonitorBody | string {
     fileDefectOnFailure: body.fileDefectOnFailure,
     checks,
   };
+}
+
+function parseRelativeCwd(raw: unknown): { cwd?: string } | { error: string } {
+  if (raw === undefined) return {};
+  if (typeof raw !== 'string') return { error: 'cwd must be a string' };
+  const cwd = raw.trim();
+  if (!cwd) return {};
+  if (isAbsolute(cwd)) return { error: 'cwd must be relative to the project root' };
+  const normalized = normalize(cwd);
+  if (normalized === '..' || normalized.startsWith('../') || normalized.startsWith('..\\')) {
+    return { error: 'cwd cannot leave the project root' };
+  }
+  return normalized === '.' ? {} : { cwd: normalized };
 }

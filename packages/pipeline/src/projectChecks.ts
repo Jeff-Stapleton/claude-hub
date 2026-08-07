@@ -1,5 +1,6 @@
 import type { AgentRunner } from '@claude-hub/agent-runner';
 import type { Project, ProjectMonitorCheck, Store } from '@claude-hub/core';
+import { isAbsolute, relative, resolve } from 'node:path';
 import { runCommands } from './commands.js';
 import { MACHINE_FAIL_MARKER, MACHINE_PASS_MARKER } from './defaults.js';
 import { buildProjectPreamble, checkResultMarker, resolveToolAssignments } from './stages.js';
@@ -45,8 +46,9 @@ export async function runProjectCheck(
       case 'http':
         return await runHttpCheck(check.url, check.expectedStatus, check.timeoutMs, started);
       case 'command': {
+        const cwd = resolveCommandCwd(project.path, check.cwd);
         const result = await runCommands([check.command], {
-          cwd: project.path,
+          cwd,
           timeoutMs: check.timeoutMs ?? DEFAULT_COMMAND_CHECK_TIMEOUT_MS,
         });
         const error = result.timedOut
@@ -56,7 +58,7 @@ export async function runProjectCheck(
             : `command failed (exit ${result.exitCode})`;
         return {
           ok: result.ok,
-          output: truncateCheckOutput(result.output),
+          output: truncateCheckOutput(`cwd: ${cwd}\n${result.output}`),
           ...(error !== undefined ? { error } : {}),
           durationMs: Date.now() - started,
         };
@@ -149,4 +151,15 @@ async function runAgentCheck(
 function truncateCheckOutput(text: string): string {
   if (text.length <= CHECK_OUTPUT_LIMIT) return text;
   return text.slice(0, CHECK_OUTPUT_LIMIT) + '\n… [truncated]';
+}
+
+function resolveCommandCwd(projectPath: string, cwd: string | undefined): string {
+  if (cwd === undefined || cwd.trim() === '') return projectPath;
+  if (isAbsolute(cwd)) throw new Error('command cwd must be relative to the project root');
+  const resolved = resolve(projectPath, cwd);
+  const rel = relative(projectPath, resolved);
+  if (rel === '..' || rel.startsWith('../') || rel.startsWith('..\\') || isAbsolute(rel)) {
+    throw new Error('command cwd cannot leave the project root');
+  }
+  return resolved;
 }

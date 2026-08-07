@@ -41,7 +41,11 @@ export interface SpawnOptions {
   claudePath?: string;
   /** Extra CLI args appended before the prompt. */
   extraArgs?: string[];
-  /** Extra env vars merged over process.env for the child. */
+  /**
+   * Extra env vars merged over process.env for the child. Inherited
+   * ANTHROPIC_API_KEY/ANTHROPIC_AUTH_TOKEN are stripped so runs bill to
+   * the subscription login; set them here to opt back in explicitly.
+   */
   env?: Record<string, string>;
 }
 

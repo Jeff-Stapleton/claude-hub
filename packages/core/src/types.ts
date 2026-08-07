@@ -369,6 +369,12 @@ export interface StageResult {
   checksPassed?: number;
   /** WAIT ticks recorded so far. Machines with a monitor loop only. */
   waitTicks?: number;
+  /**
+   * Consecutive monitor ticks whose agent output carried no MACHINE_RESULT
+   * marker (harness/provider flake, not a machine verdict). Reset on any
+   * PASS/WAIT tick. Machines with a monitor loop only.
+   */
+  missedTicks?: number;
   /** When the most recent monitor check ran (any outcome). */
   lastCheckAt?: ISODateString;
 }
@@ -427,7 +433,12 @@ export interface HttpMonitorCheck extends ProjectMonitorCheckBase {
 
 export interface CommandMonitorCheck extends ProjectMonitorCheckBase {
   type: 'command';
-  /** Shell command run in the project root; exit 0 = healthy. */
+  /**
+   * Relative working directory under the project root. Absent = project root.
+   * Useful for monorepos where the smoke test lives in one repo/module.
+   */
+  cwd?: string;
+  /** Shell command; exit 0 = healthy. */
   command: string;
 }
 

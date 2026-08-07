@@ -206,7 +206,7 @@ function checkTarget(check: ProjectMonitorCheck): string {
     case 'http':
       return check.url;
     case 'command':
-      return check.command;
+      return check.cwd ? `cwd ${check.cwd}: ${check.command}` : check.command;
     case 'agent':
       return check.prompt.split('\n', 1)[0] ?? '';
   }

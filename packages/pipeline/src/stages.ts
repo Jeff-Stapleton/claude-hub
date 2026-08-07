@@ -43,6 +43,12 @@ export interface ExecuteStageResult {
    */
   wait?: boolean;
   error?: string;
+  /**
+   * The strict check failed only because no MACHINE_RESULT marker was
+   * present (e.g. an empty final message) — a harness flake rather than a
+   * reported verdict. Lets monitor loops tolerate transient misses.
+   */
+  missingMarker?: boolean;
   /** Provider session id to persist on the item, when an agent run happened. */
   session?: { provider: AgentProviderId; sessionId: string };
 }
@@ -121,6 +127,7 @@ export async function executeMachine(
         prompt,
         ...(summary !== undefined ? { summary } : {}),
         error: verdict.error,
+        ...(verdict.missingMarker ? { missingMarker: true } : {}),
         session,
       };
     }
@@ -330,7 +337,9 @@ export function buildContext(
   return { request: item.request, title: item.title, source: item.source, stages, previous };
 }
 
-export type ResultVerdict = { verdict: 'pass' | 'wait' } | { verdict: 'fail'; error: string };
+export type ResultVerdict =
+  | { verdict: 'pass' | 'wait' }
+  | { verdict: 'fail'; error: string; missingMarker?: boolean };
 
 /**
  * resultCheck machines self-report via marker lines. 'strict' requires an
@@ -355,7 +364,13 @@ export function checkResultMarker(
   if (mode === 'strict') {
     const passed =
       text.includes(MACHINE_PASS_MARKER) || LEGACY_PASS_MARKERS.some((m) => text.includes(m));
-    if (!passed) return { verdict: 'fail', error: `machine did not report ${MACHINE_PASS_MARKER}` };
+    if (!passed) {
+      return {
+        verdict: 'fail',
+        error: `machine did not report ${MACHINE_PASS_MARKER}`,
+        missingMarker: true,
+      };
+    }
   }
   return { verdict: 'pass' };
 }

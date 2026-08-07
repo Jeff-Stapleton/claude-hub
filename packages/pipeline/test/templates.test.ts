@@ -45,6 +45,17 @@ describe('machine template listings', () => {
     }
   });
 
+  it('monitor-loop templates forbid tool-call endings and self-scheduling', () => {
+    // A tick that ends on a tool call has no final text, so the strict
+    // marker check reads it as a failure — the prompts must forbid it.
+    for (const slug of ['code-review', 'monitor'] as const) {
+      const template = findMachineTemplate(store, builtinTemplateId(slug));
+      expect(template?.promptTemplate).toContain('Never end your turn on a tool call');
+      expect(template?.promptTemplate).toContain('ScheduleWakeup');
+      expect(template?.promptTemplate).toContain('the pipeline owns the tick schedule');
+    }
+  });
+
   it('keeps the monitor builtin resolvable for installed machines', () => {
     expect(listMachineTemplates(store).some((t) => t.id === builtinTemplateId('monitor'))).toBe(
       true,

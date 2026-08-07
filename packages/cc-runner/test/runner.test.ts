@@ -70,6 +70,33 @@ describe('spawnProjectSession', () => {
     expect(res.ok).toBe(false);
   });
 
+  it('strips inherited ANTHROPIC_API_KEY but honors an explicit opts.env key', async () => {
+    const fake = await writeFakeClaude(
+      dir,
+      `console.log(JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: process.env.ANTHROPIC_API_KEY ?? 'unset', session_id: '33333333-3333-3333-3333-333333333333' }));`,
+    );
+
+    const prev = process.env.ANTHROPIC_API_KEY;
+    process.env.ANTHROPIC_API_KEY = 'sk-inherited';
+    try {
+      const inherited = await spawnProjectSession({ cwd: dir, prompt: '.', claudePath: fake });
+      expect(inherited.ok).toBe(true);
+      if (inherited.ok) expect(inherited.text).toBe('unset');
+
+      const explicit = await spawnProjectSession({
+        cwd: dir,
+        prompt: '.',
+        claudePath: fake,
+        env: { ANTHROPIC_API_KEY: 'sk-explicit' },
+      });
+      expect(explicit.ok).toBe(true);
+      if (explicit.ok) expect(explicit.text).toBe('sk-explicit');
+    } finally {
+      if (prev === undefined) delete process.env.ANTHROPIC_API_KEY;
+      else process.env.ANTHROPIC_API_KEY = prev;
+    }
+  });
+
   it(
     'honors timeoutMs and kills the child',
     async () => {

@@ -28,6 +28,15 @@ export const MACHINE_FAIL_MARKER = 'MACHINE_RESULT: FAIL';
 export const MACHINE_WAIT_MARKER = 'MACHINE_RESULT: WAIT';
 /** Backstop: a machine that only ever WAITs surfaces as a failure after this. */
 export const MONITOR_WAIT_TIMEOUT_HOURS = 72;
+/**
+ * A monitor tick whose agent output carries no MACHINE_RESULT marker at all
+ * (a turn ended on a tool call, a provider hiccup) is a harness flake, not a
+ * machine verdict. Once the loop has ticked successfully at least once, the
+ * item only fails on this many CONSECUTIVE marker-less ticks; any PASS/WAIT
+ * tick resets the streak. An explicit MACHINE_RESULT: FAIL still fails
+ * immediately.
+ */
+export const MONITOR_MAX_MISSED_TICKS = 3;
 /** Pre-v7 markers still honored so migrated custom prompts keep working. */
 export const LEGACY_PASS_MARKERS: readonly string[] = ['MONITOR_RESULT: PASS'];
 export const LEGACY_FAIL_MARKERS: readonly string[] = [
@@ -47,6 +56,17 @@ export const MACHINE_SUMMARY_INSTRUCTION =
   'followed by a 1-2 sentence high-level summary of what you did and the outcome. ' +
   'If you were also asked to end with a MACHINE_RESULT line, put the MACHINE_SUMMARY ' +
   'line immediately before it.';
+
+/**
+ * Appended to the monitor-loop templates (code-review, monitor). The marker
+ * check reads the turn's final text, so a tick that ends on a tool call (or
+ * tries to own its own scheduling) reports nothing and reads as a failure.
+ */
+const MACHINE_TICK_DISCIPLINE =
+  'End every tick with a final plain-text message whose last line is the ' +
+  'MACHINE_RESULT line. Never end your turn on a tool call, and never use ' +
+  'scheduling tools (ScheduleWakeup, cron, sleep) — the pipeline owns the ' +
+  'tick schedule and will re-invoke you.';
 
 const EPOCH = new Date(0).toISOString();
 
@@ -73,6 +93,8 @@ const CODE_REVIEW_PROMPT =
   'MACHINE_RESULT: FAIL <reason> — an unrecoverable situation: no GitLab ' +
   'remote, the MR was closed by a human, pushes are rejected, or CI keeps ' +
   'failing after 3 distinct fix attempts for the same job.\n\n' +
+  MACHINE_TICK_DISCIPLINE +
+  '\n\n' +
   'Lifecycle:\n\n' +
   '1. No merge request yet: the working tree in the current directory ' +
   'contains the implemented change from earlier stations. Derive the GitLab ' +
@@ -235,7 +257,9 @@ export const BUILTIN_MACHINE_TEMPLATES: readonly MachineTemplate[] = [
       'for the request below: exercise the affected behavior end-to-end and ' +
       'look for errors. End your reply with exactly one line: ' +
       'MACHINE_RESULT: PASS if everything is healthy, or MACHINE_RESULT: FAIL ' +
-      'with a short reason.\n\nRequest "{{title}}":\n{{request}}',
+      'with a short reason.\n\n' +
+      MACHINE_TICK_DISCIPLINE +
+      '\n\nRequest "{{title}}":\n{{request}}',
     createdAt: EPOCH,
     updatedAt: EPOCH,
   },

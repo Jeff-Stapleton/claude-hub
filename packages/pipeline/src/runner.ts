@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import {
   DEFAULT_MONITOR_MAX_CHECKS,
+  MONITOR_MAX_MISSED_TICKS,
   MONITOR_WAIT_TIMEOUT_HOURS,
   effectivePipelineConfig,
 } from './defaults.js';
@@ -298,6 +299,7 @@ export class PipelineRunner extends EventEmitter {
     let error: string | undefined;
     let prompt: string | undefined;
     let summary: string | undefined;
+    let missingMarker = false;
     let session: Awaited<ReturnType<typeof executeMachine>>['session'];
 
     if (!project) {
@@ -316,7 +318,22 @@ export class PipelineRunner extends EventEmitter {
       error = res.error;
       prompt = res.prompt;
       summary = res.summary ?? fallbackSummary(res.output);
+      missingMarker = res.missingMarker ?? false;
       session = res.session;
+    }
+
+    // A marker-less tick (a turn that ended on a tool call, a provider
+    // hiccup) is a harness flake, not a machine verdict — one flake must not
+    // kill a long-running healthy watch. Once the loop has ticked at least
+    // once, tolerate up to MONITOR_MAX_MISSED_TICKS consecutive misses; an
+    // explicit MACHINE_RESULT: FAIL still fails immediately.
+    let missedTick = false;
+    let missedTicks = 0;
+    if (!ok && missingMarker) {
+      const stage = item.stages[machineKey];
+      const hasTicked = (stage?.waitTicks ?? 0) > 0 || (stage?.checksPassed ?? 0) > 0;
+      missedTicks = (stage?.missedTicks ?? 0) + 1;
+      if (hasTicked && missedTicks < MONITOR_MAX_MISSED_TICKS) missedTick = true;
     }
 
     // Backstop: a machine that only ever WAITs (e.g. an MR nobody reviews)
@@ -357,6 +374,29 @@ export class PipelineRunner extends EventEmitter {
       ...(error !== undefined ? { error } : {}),
     });
 
+    if (missedTick) {
+      // Tolerated miss: record it and keep monitoring. The tick itself is
+      // logged as failed above; only the item survives. Like WAIT, a miss
+      // breaks the consecutive-pass streak — passes count only when
+      // uninterrupted.
+      await this.updateItem(id, (it) => {
+        it.stages[machineKey] = {
+          ...it.stages[machineKey],
+          status: it.stages[machineKey]?.status ?? 'running',
+          checksPassed: 0,
+          missedTicks,
+          lastCheckAt: finishedAt,
+          ...(error !== undefined ? { error } : {}),
+        };
+        if (session) it.sessions = { ...it.sessions, [session.provider]: session.sessionId };
+      });
+      console.warn(
+        `[pipeline] "${item.title}" (${id.slice(0, 8)}) monitor tick at ${machineKey} had no MACHINE_RESULT marker ` +
+          `(miss ${missedTicks}/${MONITOR_MAX_MISSED_TICKS}); still monitoring`,
+      );
+      return;
+    }
+
     if (ok && wait) {
       // Still pending (e.g. waiting on reviewers or a running CI pipeline):
       // record the tick and keep monitoring. WAIT breaks a consecutive-pass
@@ -368,6 +408,7 @@ export class PipelineRunner extends EventEmitter {
           status: it.stages[machineKey]?.status ?? 'running',
           checksPassed: 0,
           waitTicks: ticks,
+          missedTicks: 0,
           lastCheckAt: finishedAt,
           output: truncateOutput(output),
           ...(summary !== undefined ? { summary } : {}),
@@ -417,6 +458,7 @@ export class PipelineRunner extends EventEmitter {
             ...it.stages[machineKey],
             status: it.stages[machineKey]?.status ?? 'running',
             checksPassed: passed,
+            missedTicks: 0,
             lastCheckAt: finishedAt,
             output: truncateOutput(output),
             ...(summary !== undefined ? { summary } : {}),
@@ -443,15 +485,17 @@ export class PipelineRunner extends EventEmitter {
     console.warn(`[pipeline] "${item.title}" (${id.slice(0, 8)}) monitor check failed: ${error ?? 'unknown'}`);
 
     // Auto-file a defect back at the top of the line. Loop guards: defects
-    // found while monitoring a defect fix don't file further defects, and a
+    // found while monitoring a defect fix don't file further defects, a
     // wait-timeout (gave up waiting on humans) surfaces red without spawning
-    // a defect item that would re-run the whole line.
-    if (failed && item.source !== 'monitor' && !waitTimeout) {
+    // a defect item that would re-run the whole line, and an empty check
+    // output means the harness flaked (nothing for a defect item to
+    // investigate), not that the product broke.
+    if (failed && item.source !== 'monitor' && !waitTimeout && output.trim() !== '') {
       await this.enqueue({
         projectId: item.projectId,
         title: `Defect: ${item.title}`.slice(0, TITLE_LIMIT + 8),
         request:
-          `A production monitor check failed after shipping "${item.title}".\n\n` +
+          `The "${machine.name}" station's monitor check failed for "${item.title}".\n\n` +
           `Original request:\n${item.request}\n\n` +
           `Monitor failure:\n${error ?? 'unknown'}\n\n` +
           `Check output:\n${truncateOutput(output)}\n\n` +

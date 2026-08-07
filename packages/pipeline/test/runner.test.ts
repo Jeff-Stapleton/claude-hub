@@ -638,6 +638,17 @@ describe('checkResultMarker', () => {
       verdict: 'fail',
     });
   });
+
+  it('flags the strict missing-marker case so monitor loops can tolerate it', () => {
+    expect(checkResultMarker('strict', '')).toMatchObject({
+      verdict: 'fail',
+      missingMarker: true,
+    });
+    // An explicit FAIL is a verdict, not a flake — never flagged.
+    expect(checkResultMarker('strict', 'MACHINE_RESULT: FAIL broke')).not.toMatchObject({
+      missingMarker: true,
+    });
+  });
 });
 
 describe('PipelineRunner.runMonitorCheck', () => {
@@ -771,6 +782,9 @@ describe('PipelineRunner.runMonitorCheck', () => {
     expect(defect).toBeDefined();
     expect(defect?.sourceRef).toBe(item.id);
     expect(defect?.title).toMatch(/^Defect:/);
+    // The request names the actual station instead of claiming a production
+    // monitor caught a shipped defect.
+    expect(defect?.request).toContain('The "Monitor" station\'s monitor check failed');
   });
 
   it('treats a missing PASS marker as a failure (strict resultCheck)', async () => {
@@ -780,6 +794,101 @@ describe('PipelineRunner.runMonitorCheck', () => {
       .mockReturnValue(new Promise(() => {}));
     await runner.runMonitorCheck(item.id);
     expect(store.workItems().find((it) => it.id === item.id)?.status).toBe('failed');
+  });
+
+  it('does not file a defect when the failed check produced no output', async () => {
+    const item = await seedMonitoring('manual');
+    mockRun.mockResolvedValue(okResult(''));
+    // First tick: no prior healthy tick, so a marker-less empty output hard-fails.
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems().find((it) => it.id === item.id)?.status).toBe('failed');
+    // ...but an empty-output defect is uninvestigatable — none is filed.
+    expect(store.workItems().filter((it) => it.source === 'monitor')).toHaveLength(0);
+  });
+
+  it('tolerates marker-less ticks once the loop has ticked, then fails without a defect', async () => {
+    const item = await seedMonitoring('manual', 1);
+    // The loop has been healthy: 5 recorded WAIT ticks.
+    await store.update('workItems', (items) =>
+      items.map((it) =>
+        it.id === item.id
+          ? { ...it, stages: { ...it.stages, monitor: { ...it.stages['monitor']!, waitTicks: 5 } } }
+          : it,
+      ),
+    );
+    // A turn that ended on a tool call produces no final text at all.
+    mockRun.mockResolvedValue(okResult(''));
+
+    await runner.runMonitorCheck(item.id);
+    let live = store.workItems().find((it) => it.id === item.id);
+    expect(live?.status).toBe('monitoring');
+    expect(live?.stages.monitor?.missedTicks).toBe(1);
+
+    await runner.runMonitorCheck(item.id);
+    live = store.workItems().find((it) => it.id === item.id);
+    expect(live?.status).toBe('monitoring');
+    expect(live?.stages.monitor?.missedTicks).toBe(2);
+
+    // The third consecutive miss exhausts the tolerance and fails the item —
+    // but an empty check output files no defect (nothing to investigate).
+    await runner.runMonitorCheck(item.id);
+    live = store.workItems().find((it) => it.id === item.id);
+    expect(live?.status).toBe('failed');
+    expect(store.workItems()).toHaveLength(1);
+  });
+
+  it('a WAIT tick resets the missed-tick streak', async () => {
+    const item = await seedMonitoring('manual', 1);
+    await store.update('workItems', (items) =>
+      items.map((it) =>
+        it.id === item.id
+          ? { ...it, stages: { ...it.stages, monitor: { ...it.stages['monitor']!, waitTicks: 1 } } }
+          : it,
+      ),
+    );
+    mockRun
+      .mockResolvedValueOnce(okResult(''))
+      .mockResolvedValueOnce(okResult('still open\nMACHINE_RESULT: WAIT'))
+      .mockResolvedValueOnce(okResult(''));
+
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems()[0]?.stages.monitor?.missedTicks).toBe(1);
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems()[0]?.stages.monitor?.missedTicks).toBe(0);
+    await runner.runMonitorCheck(item.id);
+    const live = store.workItems().find((it) => it.id === item.id);
+    expect(live?.status).toBe('monitoring');
+    expect(live?.stages.monitor?.missedTicks).toBe(1);
+  });
+
+  it('an explicit FAIL is a verdict, never a tolerated miss', async () => {
+    const item = await seedMonitoring('manual', 1);
+    await store.update('workItems', (items) =>
+      items.map((it) =>
+        it.id === item.id
+          ? { ...it, stages: { ...it.stages, monitor: { ...it.stages['monitor']!, waitTicks: 5 } } }
+          : it,
+      ),
+    );
+    mockRun
+      .mockResolvedValueOnce(okResult('broken\nMACHINE_RESULT: FAIL errors in logs'))
+      .mockReturnValue(new Promise(() => {}));
+
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems().find((it) => it.id === item.id)?.status).toBe('failed');
+  });
+
+  it('names the failing station in the auto-filed defect request', async () => {
+    const item = await seedMonitoring('manual');
+    mockRun
+      .mockResolvedValueOnce(okResult('something is wrong\nMACHINE_RESULT: FAIL errors in logs'))
+      .mockReturnValue(new Promise(() => {}));
+
+    await runner.runMonitorCheck(item.id);
+
+    const defect = store.workItems().find((it) => it.source === 'monitor');
+    expect(defect?.request).toMatch(/The "Monitor" station's monitor check failed/);
+    expect(defect?.request).toContain('something is wrong');
   });
 
   it('does not file a defect for monitor-sourced items (loop guard)', async () => {
@@ -881,6 +990,27 @@ describe('PipelineRunner.runMonitorCheck', () => {
     );
     expect(failed.stages.test?.error).toMatch(/no monitor loop/);
   });
+
+  it('a tolerated miss resets the consecutive-pass streak', async () => {
+    const item = await seedMonitoring('manual', 2);
+    mockRun
+      .mockResolvedValueOnce(okResult('MACHINE_RESULT: PASS'))
+      .mockResolvedValueOnce(okResult('no marker in this text'))
+      .mockResolvedValueOnce(okResult('MACHINE_RESULT: PASS'))
+      .mockResolvedValueOnce(okResult('MACHINE_RESULT: PASS'));
+
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems()[0]?.stages.monitor?.checksPassed).toBe(1);
+    await runner.runMonitorCheck(item.id); // miss: tolerated, streak broken
+    expect(store.workItems()[0]?.status).toBe('monitoring');
+    expect(store.workItems()[0]?.stages.monitor?.checksPassed).toBe(0);
+    await runner.runMonitorCheck(item.id);
+    await runner.runMonitorCheck(item.id);
+    expect(store.workItems()).toHaveLength(0);
+    const archived = await readArchivedWorkItems(store.paths, project.id);
+    expect(archived[0]?.status).toBe('done');
+  });
+
 });
 
 describe('toolbox assignment resolution', () => {

@@ -41,10 +41,19 @@ export async function spawnProjectSession(opts: SpawnOptions): Promise<SpawnResu
   // receives only the first word. Node's default spawn quoting handles
   // this correctly when shell is false.
   const useShell = opts.claudePath !== undefined && /\s/.test(opts.claudePath);
+
+  // Runs bill to the operator's Claude subscription login. An
+  // ANTHROPIC_API_KEY/AUTH_TOKEN inherited from the parent shell would
+  // silently switch the CLI to API-key billing, so strip them; a key
+  // passed explicitly via opts.env is deliberate and still applies.
+  const baseEnv: NodeJS.ProcessEnv = { ...process.env };
+  delete baseEnv.ANTHROPIC_API_KEY;
+  delete baseEnv.ANTHROPIC_AUTH_TOKEN;
+
   return new Promise<SpawnResult>((resolve) => {
     const child = spawn(claudePath, args, {
       cwd: opts.cwd,
-      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      env: opts.env ? { ...baseEnv, ...opts.env } : baseEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: useShell,
     });

@@ -355,6 +355,7 @@ export interface HttpMonitorCheck extends ProjectMonitorCheckBase {
 
 export interface CommandMonitorCheck extends ProjectMonitorCheckBase {
   type: 'command';
+  cwd?: string;
   command: string;
 }
 
