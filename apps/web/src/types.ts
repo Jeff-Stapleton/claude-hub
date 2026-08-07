@@ -114,6 +114,8 @@ export interface CronTrigger {
   projectId: string;
   prompt: string;
   cronExpr: string;
+  /** Falls back to config.defaultProvider. */
+  provider?: AgentProviderId;
   notify?: { channelId: string };
   lastRun?: string;
   lastStatus?: TriggerRunStatus;
@@ -125,6 +127,8 @@ export interface WebhookTrigger {
   name: string;
   projectId: string;
   promptTemplate: string;
+  /** Falls back to config.defaultProvider. */
+  provider?: AgentProviderId;
   notify?: { channelId: string };
   lastRun?: string;
   lastStatus?: TriggerRunStatus;

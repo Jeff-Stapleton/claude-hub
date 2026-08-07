@@ -1,4 +1,5 @@
 import type {
+  AgentProviderId,
   AppConfig,
   CronTrigger,
   MachineTemplate,
@@ -12,6 +13,7 @@ import type {
   RedactedVaultEntry,
   ToolboxMcpServer,
   ToolboxSkill,
+  Trigger,
   UIState,
   WorkItem,
 } from './types.js';
@@ -89,6 +91,7 @@ export interface TriggerRunRecord {
   finishedAt?: string;
   status: 'running' | 'success' | 'error';
   prompt: string;
+  provider?: AgentProviderId;
   transcript?: string;
   error?: string;
 }
@@ -232,16 +235,23 @@ export const api = {
     projectId: string;
     prompt: string;
     cronExpr: string;
+    provider?: AgentProviderId;
   }) =>
     req<CronTrigger>('/api/triggers/cron', { method: 'POST', body: JSON.stringify(body) }),
   createWebhookTrigger: (body: {
     name: string;
     projectId: string;
     promptTemplate: string;
+    provider?: AgentProviderId;
   }) =>
     req<WebhookCreateResponse>('/api/triggers/webhook', {
       method: 'POST',
       body: JSON.stringify(body),
+    }),
+  updateTrigger: ({ id, provider }: { id: string; provider: AgentProviderId | null }) =>
+    req<Trigger>(`/api/triggers/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ provider }),
     }),
   deleteTrigger: (id: string) =>
     req<{ ok: true }>(`/api/triggers/${encodeURIComponent(id)}`, { method: 'DELETE' }),

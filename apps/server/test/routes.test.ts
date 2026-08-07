@@ -455,6 +455,112 @@ describe('trigger routes', () => {
     expect(JSON.parse(res.body).error).toMatch(/unknown projectId/);
   });
 
+  it('POST /api/triggers/cron persists a provider override', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: {
+        name: 'cursor-cron',
+        projectId,
+        prompt: 'x',
+        cronExpr: '0 9 * * *',
+        provider: 'cursor',
+      },
+    });
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body).provider).toBe('cursor');
+    expect(store.triggers()[0]?.provider).toBe('cursor');
+  });
+
+  it('POST /api/triggers/cron rejects an unknown provider', async () => {
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: {
+        name: 'bad-provider',
+        projectId,
+        prompt: 'x',
+        cronExpr: '0 9 * * *',
+        provider: 'copilot',
+      },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/provider must be/);
+  });
+
+  it('PATCH /api/triggers/:id sets and clears the provider override', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: { name: 'patchable', projectId, prompt: 'x', cronExpr: '0 9 * * *' },
+    });
+    const id = JSON.parse(create.body).id;
+
+    const set = await app.inject({
+      method: 'PATCH',
+      url: `/api/triggers/${id}`,
+      payload: { provider: 'cursor' },
+    });
+    expect(set.statusCode).toBe(200);
+    expect(JSON.parse(set.body).provider).toBe('cursor');
+    expect(store.triggers()[0]?.provider).toBe('cursor');
+
+    const clear = await app.inject({
+      method: 'PATCH',
+      url: `/api/triggers/${id}`,
+      payload: { provider: null },
+    });
+    expect(clear.statusCode).toBe(200);
+    expect(JSON.parse(clear.body).provider).toBeUndefined();
+    expect(store.triggers()[0]?.provider).toBeUndefined();
+  });
+
+  it('PATCH /api/triggers/:id rejects an unknown provider', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: { name: 'patchable', projectId, prompt: 'x', cronExpr: '0 9 * * *' },
+    });
+    const id = JSON.parse(create.body).id;
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/triggers/${id}`,
+      payload: { provider: 'copilot' },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/provider must be/);
+  });
+
+  it('PATCH /api/triggers/:id returns 404 for an unknown trigger', async () => {
+    const res = await app.inject({
+      method: 'PATCH',
+      url: '/api/triggers/nonexistent',
+      payload: { provider: 'claude' },
+    });
+    expect(res.statusCode).toBe(404);
+  });
+
+  it('PATCH /api/triggers/:id never echoes the webhook secret', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/webhook',
+      payload: { name: 'wh', projectId, promptTemplate: 'x' },
+    });
+    const id = JSON.parse(create.body).id;
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/triggers/${id}`,
+      payload: { provider: 'cursor' },
+    });
+    expect(res.statusCode).toBe(200);
+    const body = JSON.parse(res.body);
+    expect(body.provider).toBe('cursor');
+    expect(body.secret).toBeUndefined();
+    expect(body.secretSet).toBe(true);
+  });
+
   it('POST /api/triggers/:id/run returns 202 with JSON body', async () => {
     // Create a trigger first
     const create = await app.inject({

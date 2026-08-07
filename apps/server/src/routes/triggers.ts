@@ -1,4 +1,4 @@
-import type { Store, Trigger, WebhookTrigger } from '@claude-hub/core';
+import type { AgentProviderId, Store, Trigger, WebhookTrigger } from '@claude-hub/core';
 import {
   generateWebhookSecret,
   readRecentTriggerRuns,
@@ -14,6 +14,7 @@ interface CreateCronBody {
   projectId: string;
   prompt: string;
   cronExpr: string;
+  provider?: AgentProviderId;
   mode?: 'run' | 'enqueue';
   notify?: { channelId: string };
 }
@@ -22,12 +23,31 @@ interface CreateWebhookBody {
   name: string;
   projectId: string;
   promptTemplate: string;
+  provider?: AgentProviderId;
   mode?: 'run' | 'enqueue';
   notify?: { channelId: string };
 }
 
+interface UpdateTriggerBody {
+  /** A provider sets the override; null clears it back to the default. */
+  provider?: AgentProviderId | null;
+}
+
+const PROVIDERS = new Set(['claude', 'cursor']);
+
 function validMode(mode: unknown): mode is 'run' | 'enqueue' | undefined {
   return mode === undefined || mode === 'run' || mode === 'enqueue';
+}
+
+function validProvider(provider: unknown): provider is AgentProviderId | undefined {
+  return provider === undefined || (typeof provider === 'string' && PROVIDERS.has(provider));
+}
+
+/** Webhook secrets are only ever returned by the create response. */
+function redactTrigger(trigger: Trigger): unknown {
+  if (trigger.type !== 'webhook') return trigger;
+  const { secret: _secret, ...rest } = trigger;
+  return { ...rest, secretSet: true };
 }
 
 /**
@@ -40,7 +60,7 @@ export async function registerTriggerRoutes(
   runner: TriggerRunner,
 ): Promise<void> {
   app.post<{ Body: CreateCronBody }>('/api/triggers/cron', async (req, reply) => {
-    const { name, projectId, prompt, cronExpr, mode, notify } =
+    const { name, projectId, prompt, cronExpr, provider, mode, notify } =
       req.body ?? ({} as CreateCronBody);
     if (!name || !projectId || !prompt || !cronExpr) {
       return reply
@@ -49,6 +69,9 @@ export async function registerTriggerRoutes(
     }
     if (!validMode(mode)) {
       return reply.code(400).send({ error: `invalid mode: ${String(mode)}` });
+    }
+    if (!validProvider(provider)) {
+      return reply.code(400).send({ error: 'provider must be "claude" or "cursor"' });
     }
     if (!cron.validate(cronExpr)) {
       return reply.code(400).send({ error: `invalid cron expression: ${cronExpr}` });
@@ -64,12 +87,40 @@ export async function registerTriggerRoutes(
       projectId,
       prompt,
       cronExpr,
+      ...(provider !== undefined ? { provider } : {}),
       ...(mode !== undefined ? { mode } : {}),
       ...(notify ? { notify } : {}),
     };
     await store.update('triggers', (current) => [...current, trigger]);
     return trigger;
   });
+
+  app.patch<{ Params: { id: string }; Body: UpdateTriggerBody }>(
+    '/api/triggers/:id',
+    async (req, reply) => {
+      const { provider } = req.body ?? ({} as UpdateTriggerBody);
+      if (provider !== null && !validProvider(provider)) {
+        return reply.code(400).send({ error: 'provider must be "claude" or "cursor"' });
+      }
+      if (!store.triggers().some((t) => t.id === req.params.id)) {
+        return reply.code(404).send({ error: 'not found' });
+      }
+
+      await store.update('triggers', (current) =>
+        current.map((t) => {
+          if (t.id !== req.params.id || provider === undefined) return t;
+          if (provider === null) {
+            const { provider: _cleared, ...rest } = t;
+            return rest as Trigger;
+          }
+          return { ...t, provider };
+        }),
+      );
+
+      const updated = store.triggers().find((t) => t.id === req.params.id)!;
+      return redactTrigger(updated);
+    },
+  );
 
   app.delete<{ Params: { id: string } }>('/api/triggers/:id', async (req, reply) => {
     const before = store.triggers().length;
@@ -99,7 +150,7 @@ export async function registerTriggerRoutes(
   // ---------------------------------------------------------------------
 
   app.post<{ Body: CreateWebhookBody }>('/api/triggers/webhook', async (req, reply) => {
-    const { name, projectId, promptTemplate, mode, notify } =
+    const { name, projectId, promptTemplate, provider, mode, notify } =
       req.body ?? ({} as CreateWebhookBody);
     if (!name || !projectId || !promptTemplate) {
       return reply
@@ -108,6 +159,9 @@ export async function registerTriggerRoutes(
     }
     if (!validMode(mode)) {
       return reply.code(400).send({ error: `invalid mode: ${String(mode)}` });
+    }
+    if (!validProvider(provider)) {
+      return reply.code(400).send({ error: 'provider must be "claude" or "cursor"' });
     }
     if (!store.projects().some((p) => p.id === projectId)) {
       return reply.code(400).send({ error: `unknown projectId: ${projectId}` });
@@ -120,6 +174,7 @@ export async function registerTriggerRoutes(
       projectId,
       promptTemplate,
       secret: generateWebhookSecret(),
+      ...(provider !== undefined ? { provider } : {}),
       ...(mode !== undefined ? { mode } : {}),
       ...(notify ? { notify } : {}),
     };

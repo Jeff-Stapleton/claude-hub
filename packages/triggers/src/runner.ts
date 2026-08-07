@@ -64,8 +64,10 @@ export class TriggerRunner extends EventEmitter {
       return this.enqueue(trigger, runId, startedAt, prompt, input);
     }
 
+    const provider = trigger.provider ?? this.store.config().defaultProvider;
+
     console.log(
-      `[trigger] starting run ${runId.slice(0, 8)} for "${trigger.name}" (${trigger.type}) project=${trigger.projectId}`,
+      `[trigger] starting run ${runId.slice(0, 8)} for "${trigger.name}" (${trigger.type}) project=${trigger.projectId} provider=${provider}`,
     );
 
     const running: TriggerRun = {
@@ -74,6 +76,7 @@ export class TriggerRunner extends EventEmitter {
       startedAt,
       status: 'running',
       prompt,
+      provider,
       ...(input.payload !== undefined ? { payload: input.payload } : {}),
     };
     // Mark the trigger as 'running' immediately so the UI reflects it
@@ -98,7 +101,7 @@ export class TriggerRunner extends EventEmitter {
     let result: RunProjectSessionResult;
     try {
       result = await this.runner.runProjectSession({
-        provider: this.store.config().defaultProvider,
+        provider,
         cwd: project.path,
         prompt,
         ...(this.opts.timeoutMs ? { timeoutMs: this.opts.timeoutMs } : {}),

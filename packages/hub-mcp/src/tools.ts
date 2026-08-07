@@ -78,6 +78,10 @@ export function makeTools(ctx: ToolContext) {
           projectId: z.string(),
           prompt: z.string(),
           cronExpr: z.string(),
+          provider: z
+            .enum(['claude', 'cursor'])
+            .optional()
+            .describe('Agent provider override (defaults to the hub-wide default).'),
         })
         .strict(),
       handler: async (args: {
@@ -85,6 +89,7 @@ export function makeTools(ctx: ToolContext) {
         projectId: string;
         prompt: string;
         cronExpr: string;
+        provider?: 'claude' | 'cursor';
       }) => ctx.client.post('/api/triggers/cron', args),
     },
 
@@ -100,10 +105,18 @@ export function makeTools(ctx: ToolContext) {
             .describe(
               'Template rendered with {{payload.field}} substitutions on each call.',
             ),
+          provider: z
+            .enum(['claude', 'cursor'])
+            .optional()
+            .describe('Agent provider override (defaults to the hub-wide default).'),
         })
         .strict(),
-      handler: async (args: { name: string; projectId: string; promptTemplate: string }) =>
-        ctx.client.post('/api/triggers/webhook', args),
+      handler: async (args: {
+        name: string;
+        projectId: string;
+        promptTemplate: string;
+        provider?: 'claude' | 'cursor';
+      }) => ctx.client.post('/api/triggers/webhook', args),
     },
 
     delete_trigger: {

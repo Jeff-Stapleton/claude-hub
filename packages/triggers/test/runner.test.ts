@@ -105,6 +105,40 @@ describe('TriggerRunner', () => {
     );
   });
 
+  it('falls back to config.defaultProvider when the trigger has no override', async () => {
+    mockRun.mockResolvedValue({
+      ok: true,
+      provider: 'claude',
+      sessionId: 's1',
+      text: 'ok',
+      durationMs: 10,
+      raw: {} as never,
+    });
+
+    const runner = new TriggerRunner(store, agentRunner);
+    const result = await runner.run(makeTrigger());
+
+    expect(mockRun).toHaveBeenCalledWith(expect.objectContaining({ provider: 'claude' }));
+    expect(result.provider).toBe('claude');
+  });
+
+  it("uses the trigger's provider override when set", async () => {
+    mockRun.mockResolvedValue({
+      ok: true,
+      provider: 'cursor',
+      sessionId: 's1',
+      text: 'ok',
+      durationMs: 10,
+      raw: {} as never,
+    });
+
+    const runner = new TriggerRunner(store, agentRunner);
+    const result = await runner.run(makeTrigger({ provider: 'cursor' }));
+
+    expect(mockRun).toHaveBeenCalledWith(expect.objectContaining({ provider: 'cursor' }));
+    expect(result.provider).toBe('cursor');
+  });
+
   it('records error when project is missing', async () => {
     const runner = new TriggerRunner(store, agentRunner);
     const trigger = makeTrigger({ projectId: 'nonexistent' });

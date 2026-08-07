@@ -148,6 +148,11 @@ export interface CronTrigger {
   prompt: string;
   /** Standard 5-field cron expression (node-cron compatible). */
   cronExpr: string;
+  /**
+   * Falls back to config.defaultProvider. Ignored for `mode: 'enqueue'`,
+   * where each machine resolves its own provider.
+   */
+  provider?: AgentProviderId;
   mode?: TriggerMode;
   notify?: TriggerNotify;
   lastRun?: ISODateString;
@@ -166,6 +171,11 @@ export interface WebhookTrigger {
    * compared in constant time. Generated server-side on creation.
    */
   secret: string;
+  /**
+   * Falls back to config.defaultProvider. Ignored for `mode: 'enqueue'`,
+   * where each machine resolves its own provider.
+   */
+  provider?: AgentProviderId;
   mode?: TriggerMode;
   notify?: TriggerNotify;
   lastRun?: ISODateString;
@@ -184,6 +194,8 @@ export interface TriggerRun {
   status: TriggerRunStatus;
   /** The actual prompt sent to CC (after template rendering, for webhooks). */
   prompt: string;
+  /** The resolved provider that ran (absent for enqueue-mode handoffs). */
+  provider?: AgentProviderId;
   /** Webhook payload, if any. Cron runs leave this undefined. */
   payload?: unknown;
   /** Final assistant text from CC, if the run succeeded. */

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useState } from 'react';
 import { api, type WebhookCreateResponse } from '../api.js';
-import type { CronTrigger, Project, Trigger, WebhookTrigger } from '../types.js';
+import type { AgentProviderId, CronTrigger, Project, Trigger, WebhookTrigger } from '../types.js';
 
 /**
  * Triggers tab: Cron subsection is fully wired. Webhooks are listed
@@ -38,12 +38,14 @@ function CronCreateForm({ projects }: { projects: Project[] }): JSX.Element {
   const [projectId, setProjectId] = useState(projects[0]?.id ?? '');
   const [cronExpr, setCronExpr] = useState('*/5 * * * *');
   const [prompt, setPrompt] = useState('');
+  const [provider, setProvider] = useState<'' | AgentProviderId>('');
 
   const mutation = useMutation({
     mutationFn: api.createCronTrigger,
     onSuccess: () => {
       setName('');
       setPrompt('');
+      setProvider('');
       void qc.invalidateQueries({ queryKey: ['state'] });
     },
   });
@@ -58,6 +60,7 @@ function CronCreateForm({ projects }: { projects: Project[] }): JSX.Element {
           projectId,
           cronExpr: cronExpr.trim(),
           prompt: prompt.trim(),
+          ...(provider !== '' ? { provider } : {}),
         });
       }}
       style={{ display: 'grid', gap: 8, marginBottom: 16 }}
@@ -85,6 +88,7 @@ function CronCreateForm({ projects }: { projects: Project[] }): JSX.Element {
           onChange={(e) => setCronExpr(e.target.value)}
           style={{ width: 220 }}
         />
+        <HarnessSelect value={provider} onChange={setProvider} />
       </div>
       <textarea
         placeholder="Prompt (sent to the configured agent in the project's directory on each fire)"
@@ -104,6 +108,52 @@ function CronCreateForm({ projects }: { projects: Project[] }): JSX.Element {
         ) : null}
       </div>
     </form>
+  );
+}
+
+/** Provider dropdown shared by the create forms; '' means "use the default". */
+function HarnessSelect({
+  value,
+  onChange,
+}: {
+  value: '' | AgentProviderId;
+  onChange: (value: '' | AgentProviderId) => void;
+}): JSX.Element {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as '' | AgentProviderId)}
+      title="Agent harness"
+    >
+      <option value="">default provider</option>
+      <option value="claude">claude</option>
+      <option value="cursor">cursor</option>
+    </select>
+  );
+}
+
+/** Inline per-row harness editor — PATCHes the trigger on change. */
+function HarnessCell({ trigger }: { trigger: Trigger }): JSX.Element {
+  const qc = useQueryClient();
+  const update = useMutation({
+    mutationFn: api.updateTrigger,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
+
+  return (
+    <>
+      <HarnessSelect
+        value={trigger.provider ?? ''}
+        onChange={(value) =>
+          update.mutate({ id: trigger.id, provider: value === '' ? null : value })
+        }
+      />
+      {update.error ? (
+        <span style={{ color: 'crimson', marginLeft: 6, fontSize: 11 }}>
+          {String(update.error)}
+        </span>
+      ) : null}
+    </>
   );
 }
 
@@ -134,6 +184,7 @@ function CronList({
           <th style={th}>Name</th>
           <th style={th}>Project</th>
           <th style={th}>Cron</th>
+          <th style={th}>Harness</th>
           <th style={th}>Last run</th>
           <th style={th}>Status</th>
           <th style={th}></th>
@@ -186,6 +237,9 @@ function CronRow({
         <td style={td}>
           <code>{trigger.cronExpr}</code>
         </td>
+        <td style={td}>
+          <HarnessCell trigger={trigger} />
+        </td>
         <td style={td}>{trigger.lastRun ? new Date(trigger.lastRun).toLocaleString() : '—'}</td>
         <td style={td}>
           <StatusBadge status={trigger.lastStatus} />
@@ -202,7 +256,7 @@ function CronRow({
       </tr>
       {showRuns ? (
         <tr>
-          <td colSpan={6} style={td}>
+          <td colSpan={7} style={td}>
             {runs.isLoading ? (
               <em>Loading…</em>
             ) : runs.data && runs.data.length > 0 ? (
@@ -210,7 +264,7 @@ function CronRow({
                 {runs.data
                   .map(
                     (r) =>
-                      `[${r.status}] ${r.startedAt}${
+                      `[${r.status}] ${r.startedAt}${r.provider ? ` (${r.provider})` : ''}${
                         r.transcript ? ` → ${r.transcript.slice(0, 200)}` : ''
                       }${r.error ? ` !! ${r.error}` : ''}`,
                   )
@@ -231,6 +285,7 @@ function WebhookCreateForm({ projects }: { projects: Project[] }): JSX.Element {
   const [name, setName] = useState('');
   const [projectId, setProjectId] = useState(projects[0]?.id ?? '');
   const [promptTemplate, setPromptTemplate] = useState('');
+  const [provider, setProvider] = useState<'' | AgentProviderId>('');
   /** The newly-created trigger — secret shown ONCE here, then dismissed. */
   const [justCreated, setJustCreated] = useState<WebhookCreateResponse | null>(null);
 
@@ -240,6 +295,7 @@ function WebhookCreateForm({ projects }: { projects: Project[] }): JSX.Element {
       setJustCreated(created);
       setName('');
       setPromptTemplate('');
+      setProvider('');
       void qc.invalidateQueries({ queryKey: ['state'] });
     },
   });
@@ -254,6 +310,7 @@ function WebhookCreateForm({ projects }: { projects: Project[] }): JSX.Element {
             name: name.trim(),
             projectId,
             promptTemplate: promptTemplate.trim(),
+            ...(provider !== '' ? { provider } : {}),
           });
         }}
         style={{ display: 'grid', gap: 8 }}
@@ -275,6 +332,7 @@ function WebhookCreateForm({ projects }: { projects: Project[] }): JSX.Element {
               </option>
             ))}
           </select>
+          <HarnessSelect value={provider} onChange={setProvider} />
         </div>
         <textarea
           placeholder="Prompt template — e.g. &quot;Investigate PR {{payload.number}} in repo {{payload.repo}}&quot;"
@@ -373,6 +431,7 @@ function WebhookList({
           <th style={th}>Name</th>
           <th style={th}>Project</th>
           <th style={th}>URL</th>
+          <th style={th}>Harness</th>
           <th style={th}>Last run</th>
           <th style={th}>Status</th>
           <th style={th}></th>
@@ -393,6 +452,9 @@ function WebhookList({
               <td style={td}>
                 <code style={{ fontSize: 11 }}>…/{w.id.slice(0, 8)}</code>{' '}
                 <button onClick={() => void navigator.clipboard.writeText(url)}>copy URL</button>
+              </td>
+              <td style={td}>
+                <HarnessCell trigger={w} />
               </td>
               <td style={td}>{w.lastRun ? new Date(w.lastRun).toLocaleString() : '—'}</td>
               <td style={td}>{w.lastStatus ?? '—'}</td>
