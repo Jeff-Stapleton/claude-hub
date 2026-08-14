@@ -94,6 +94,25 @@ function openPipeline(mutate?: (machines: PipelineMachine[]) => void): PipelineC
   return linePipeline(machines);
 }
 
+function failedWorkItem(id = 'wi-failed'): WorkItem {
+  const now = new Date().toISOString();
+  return {
+    id,
+    projectId: project.id,
+    title: 'unresolved failure',
+    request: 'fix the original request',
+    source: 'manual',
+    status: 'failed',
+    currentStage: 'code',
+    stages: {
+      spec: { status: 'success', output: 'the preserved plan' },
+      code: { status: 'failed', error: 'boom' },
+    },
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 describe('PipelineRunner', () => {
   let root: string;
   let store: Store;
@@ -163,6 +182,54 @@ describe('PipelineRunner', () => {
       runner.enqueue({ projectId: project.id, request: 'x', source: 'manual' }),
     ).rejects.toMatchObject({ name: 'WorkItemStateError', code: 'no-enabled-stages' });
     expect(store.workItems()).toHaveLength(0);
+  });
+
+  it.each(['channel', 'cron', 'webhook'] as const)(
+    'rejects %s intake while the project has an unresolved failed item',
+    async (source) => {
+      await store.update('pipelines', [openPipeline()]);
+      const failed = failedWorkItem();
+      await store.update('workItems', [failed]);
+
+      await expect(
+        runner.enqueue({ projectId: project.id, request: 'replacement work', source }),
+      ).rejects.toMatchObject({
+        name: 'WorkItemStateError',
+        code: 'blocked-by-failed-item',
+        message: expect.stringContaining(failed.id),
+      });
+
+      expect(store.workItems()).toEqual([failed]);
+      expect(mockRun).not.toHaveBeenCalled();
+    },
+  );
+
+  it('allows explicit manual and internal monitor enqueue while a failed item exists', async () => {
+    await store.update('pipelines', [linePipeline([builtinMachine('spec', { gate: 'approval' })])]);
+    const failed = failedWorkItem();
+    await store.update('workItems', [failed]);
+
+    const manual = await runner.enqueue({
+      projectId: project.id,
+      request: 'intentional manual override',
+      source: 'manual',
+    });
+    const monitor = await runner.enqueue({
+      projectId: project.id,
+      request: 'linked monitor defect',
+      source: 'monitor',
+      sourceRef: failed.id,
+    });
+
+    await until(() => {
+      const items = store.workItems();
+      return (
+        items.find((item) => item.id === manual.id)?.status === 'waiting-approval' &&
+        items.find((item) => item.id === monitor.id)?.status === 'waiting-approval'
+      );
+    });
+    expect(store.workItems().map((item) => item.id)).toEqual([failed.id, manual.id, monitor.id]);
+    expect(mockRun).not.toHaveBeenCalled();
   });
 
   it('rejects approve when the item is not waiting', async () => {
@@ -379,6 +446,26 @@ describe('PipelineRunner', () => {
     const runs = await readWorkItemStageRuns(store.paths, 'wi-stranded');
     expect(runs.some((r) => r.status === 'interrupted' && r.stage === 'code')).toBe(true);
     expect(runs.filter((r) => r.stage === 'spec')).toHaveLength(0);
+  });
+
+  it('recover() leaves failed items unchanged and does not run an agent', async () => {
+    await store.update('pipelines', [openPipeline()]);
+    const failed = failedWorkItem('wi-failed-restart');
+    await store.update('workItems', [failed]);
+
+    await runner.recover();
+
+    expect(store.workItems()).toEqual([failed]);
+    expect(store.workItems()[0]).toMatchObject({
+      id: 'wi-failed-restart',
+      status: 'failed',
+      currentStage: 'code',
+      stages: {
+        spec: { status: 'success', output: 'the preserved plan' },
+        code: { status: 'failed', error: 'boom' },
+      },
+    });
+    expect(mockRun).not.toHaveBeenCalled();
   });
 
   it('cancel archives the item and discards the in-flight result', async () => {

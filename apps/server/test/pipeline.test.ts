@@ -4,7 +4,12 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { HubPaths, Store, type Project, type WorkItem } from '@claude-hub/core';
-import { appendStageRun, archiveWorkItem, type PipelineRunner } from '@claude-hub/pipeline';
+import {
+  WorkItemStateError,
+  appendStageRun,
+  archiveWorkItem,
+  type PipelineRunner,
+} from '@claude-hub/pipeline';
 import { registerPipelineRoutes } from '../src/routes/pipeline.js';
 
 function project(id: string): Project {
@@ -51,6 +56,7 @@ describe('work-item detail route', () => {
     store = new Store(new HubPaths(root));
     await store.load();
     await store.update('projects', () => [project('proj-1'), project('proj-2')]);
+    vi.mocked(runner.enqueue).mockReset();
     app = Fastify();
     await registerPipelineRoutes(app, store, runner);
     await app.ready();
@@ -107,5 +113,25 @@ describe('work-item detail route', () => {
   it('404s for an unknown id', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/work-items/nope' });
     expect(res.statusCode).toBe(404);
+  });
+
+  it('returns 409 when automated intake is blocked by a failed item', async () => {
+    vi.mocked(runner.enqueue).mockRejectedValue(
+      new WorkItemStateError(
+        'project proj-1 has unresolved failed work item "failed" (wi-failed)',
+        'blocked-by-failed-item',
+      ),
+    );
+
+    const res = await app.inject({
+      method: 'POST',
+      url: '/api/projects/proj-1/work-items',
+      payload: { request: 'duplicate work', source: 'channel' },
+    });
+
+    expect(res.statusCode).toBe(409);
+    expect(JSON.parse(res.body)).toEqual({
+      error: 'project proj-1 has unresolved failed work item "failed" (wi-failed)',
+    });
   });
 });

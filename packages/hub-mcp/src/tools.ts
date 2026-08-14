@@ -128,7 +128,7 @@ export function makeTools(ctx: ToolContext) {
 
     enqueue_work_request: {
       description:
-        'File a work request on a project’s assembly-line pipeline. The request flows through the project’s configured machine line autonomously (subject to each machine’s gate). Use this instead of spawn_session when the user is asking for a feature, fix, or change that should go through the full development pipeline.',
+        'File a new work request on a project’s assembly-line pipeline. The request flows through the project’s configured machine line autonomously (subject to each machine’s gate). Use this instead of spawn_session when the user is asking for a feature, fix, or change that should go through the full development pipeline. Never use this tool to replace or retry a failed work item: failed items require an explicit human retry or cancellation, and automated enqueue is rejected while one remains unresolved.',
       input: z
         .object({
           projectId: z.string(),
@@ -147,7 +147,7 @@ export function makeTools(ctx: ToolContext) {
 
     list_work_items: {
       description:
-        'List a project’s live pipeline work items (queued, running, waiting for approval, monitoring, or failed).',
+        'List a project’s live pipeline work items (queued, running, waiting for approval, monitoring, or failed). For scheduled intake, an empty result is the only idle state: any returned item, including a failed item, means the belt is occupied and intake must stop without enqueueing replacement work.',
       input: z.object({ projectId: z.string() }).strict(),
       handler: async (args: { projectId: string }) =>
         ctx.client.get(`/api/projects/${encodeURIComponent(args.projectId)}/work-items`),

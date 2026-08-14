@@ -105,6 +105,10 @@ Key behaviors and the reasoning behind them:
 - **Held items release their queue slot.** When an item parks at an approval gate (or enters
   monitoring, or fails), `advance()` returns and the drain loop picks the next queued item.
   A gated item never blocks the line.
+- **Failed items block external automated intake.** A live failed item is unresolved work, not
+  an idle belt: channel, cron, and webhook enqueue attempts receive `blocked-by-failed-item`
+  until a human retries or cancels it. Explicit manual enqueue remains available, and internal
+  monitor defects are exempt so the loop-guarded defect flow still works.
 - **Session continuity is hybrid.** Each work item resumes one provider session across its stages
   (cheap full context) *and* prior stage outputs are injectable into templates
   (`{{stages.spec.output}}`), which covers provider switches mid-line and server restarts.
@@ -168,7 +172,8 @@ GET  /api/projects/:id/pipeline          effective (defaults-merged) config
 PUT  /api/projects/:id/pipeline          full-config upsert; validates the six fixed stage keys,
                                          gate enum, commands only on test/deploy/monitor
 POST /api/projects/:id/work-items        {request, title?, source? ('manual'|'channel')} → 202;
-                                         409 when the line has zero enabled stages
+                                         409 when the line has zero enabled stages or automated
+                                         intake is blocked by an unresolved failed item
 GET  /api/projects/:id/work-items        live items; ?includeDone=true appends archived tail
 GET  /api/work-items/:id                 item + its JSONL stage records
 POST /api/work-items/:id/approve|retry|cancel   404 unknown / 409 wrong state
@@ -178,7 +183,9 @@ POST /api/work-items/:id/approve|retry|cancel   404 unknown / 409 wrong state
 Enqueue onto a blank line is rejected at `PipelineRunner.enqueue()` itself (`WorkItemStateError`
 code `no-enabled-stages`), so *every* intake path fails loudly: the REST route maps it to 409,
 enqueue-mode triggers record the rejection in their run history, and the hub-mcp tool surfaces
-the API error to the channel.
+the API error to the channel. The same propagation applies to `blocked-by-failed-item`; scheduled
+intake must treat every live item returned by `list_work_items`, including `failed`, as an occupied
+belt rather than filing replacement work.
 
 `UIState` (`src/state.ts`) gained top-level `pipelines` (effective config per registered project)
 and `workItems` (live items with the `sessions` field stripped — resume bookkeeping the UI never

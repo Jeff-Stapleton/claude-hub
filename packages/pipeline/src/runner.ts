@@ -41,7 +41,7 @@ export interface PipelineRunnerEvents {
 export class WorkItemStateError extends Error {
   constructor(
     message: string,
-    readonly code: 'not-found' | 'wrong-state' | 'no-enabled-stages',
+    readonly code: 'not-found' | 'wrong-state' | 'no-enabled-stages' | 'blocked-by-failed-item',
   ) {
     super(message);
     this.name = 'WorkItemStateError';
@@ -49,6 +49,7 @@ export class WorkItemStateError extends Error {
 }
 
 const TITLE_LIMIT = 60;
+const EXTERNAL_AUTOMATED_SOURCES = new Set<WorkItemSource>(['channel', 'cron', 'webhook']);
 
 /**
  * Drives work items through a project's ordered machine line. One item runs
@@ -114,7 +115,25 @@ export class PipelineRunner extends EventEmitter {
       updatedAt: now,
     };
 
-    await this.store.update('workItems', (items) => [...items, item]);
+    await this.store.update('workItems', (items) => {
+      // Failed items are unresolved work, not an idle belt. Keep this check
+      // in the same synchronous updater as the append so admission sees the
+      // latest in-process snapshot instead of racing another state change.
+      // Manual enqueue is the explicit user override; monitor defects are
+      // internally linked follow-up work and retain their existing behavior.
+      const blocker = EXTERNAL_AUTOMATED_SOURCES.has(input.source)
+        ? items.find(
+            (existing) => existing.projectId === input.projectId && existing.status === 'failed',
+          )
+        : undefined;
+      if (blocker) {
+        throw new WorkItemStateError(
+          `project ${input.projectId} has unresolved failed work item "${blocker.title}" (${blocker.id}); retry or cancel it before automated intake can enqueue more work`,
+          'blocked-by-failed-item',
+        );
+      }
+      return [...items, item];
+    });
     console.log(
       `[pipeline] enqueued "${item.title}" (${item.id.slice(0, 8)}) project=${item.projectId} source=${item.source}`,
     );
