@@ -7,7 +7,7 @@ import {
   ProviderAgentRunner,
   buildCursorArgs,
   materializeClaudeTools,
-  renderSkillPreamble,
+  materializeCursorTools,
 } from '../src/index.js';
 import { runProcess } from '../src/process.js';
 import type { AgentRunnerConfig, RunToolAssignments } from '../src/types.js';
@@ -96,16 +96,49 @@ describe('materializeClaudeTools', () => {
   });
 });
 
-describe('renderSkillPreamble', () => {
-  it('returns empty for no skills', () => {
-    expect(renderSkillPreamble([])).toBe('');
+describe('materializeCursorTools', () => {
+  let materialized: Awaited<ReturnType<typeof materializeCursorTools>> | undefined;
+
+  afterEach(async () => {
+    await materialized?.cleanup();
+    materialized = undefined;
   });
 
-  it('renders name, description, and body', () => {
-    const preamble = renderSkillPreamble(TOOLS.skills);
-    expect(preamble).toContain('# Available skills');
-    expect(preamble).toContain('## my-skill — Does things');
-    expect(preamble).toContain('# My skill');
+  it('writes assigned skills and MCP servers as a Cursor plugin', async () => {
+    materialized = await materializeCursorTools(TOOLS);
+
+    const pluginDir = join(materialized.dir, 'plugin');
+    const pluginJson = JSON.parse(
+      await readFile(join(pluginDir, '.cursor-plugin', 'plugin.json'), 'utf8'),
+    );
+    expect(pluginJson.name).toBe('hub-toolbox');
+
+    const skillMd = await readFile(
+      join(pluginDir, 'skills', 'my-skill', 'SKILL.md'),
+      'utf8',
+    );
+    expect(skillMd).toContain('name: my-skill');
+    expect(skillMd).toContain('# My skill');
+
+    const mcp = JSON.parse(await readFile(join(pluginDir, 'mcp.json'), 'utf8'));
+    expect(mcp.mcpServers['aws-tools']).toEqual({
+      command: 'npx',
+      args: ['-y', 'aws-mcp'],
+      env: { AWS_KEY: 'secret-value' },
+    });
+    expect(mcp.mcpServers['remote-api']).toEqual({
+      type: 'http',
+      url: 'https://example.com/mcp',
+      headers: { auth: 'tok' },
+    });
+    expect(materialized.extraArgs).toEqual(['--plugin-dir', pluginDir]);
+  });
+
+  it('cleanup removes the plugin temp dir', async () => {
+    const m = await materializeCursorTools(TOOLS);
+    expect(existsSync(m.dir)).toBe(true);
+    await m.cleanup();
+    expect(existsSync(m.dir)).toBe(false);
   });
 });
 
@@ -119,19 +152,55 @@ describe('cursor runs with tools', () => {
     approveMcps: true,
   };
 
-  it('prepends the skill preamble to the prompt and ignores MCP servers', () => {
-    const args = buildCursorArgs(config, { cwd: '/repo', prompt: 'do work', tools: TOOLS });
-    const prompt = args[args.length - 1]!;
-    expect(prompt).toContain('# Available skills');
-    expect(prompt).toContain('## my-skill — Does things');
-    expect(prompt.endsWith('do work')).toBe(true);
-    expect(args).not.toContain('--mcp-config');
-    expect(prompt).not.toContain('aws-tools');
+  it('loads materialized tools through a plugin and leaves the prompt untouched', () => {
+    const args = buildCursorArgs(
+      config,
+      { cwd: '/repo', prompt: 'do work', tools: TOOLS },
+      ['--plugin-dir', '/tmp/hub-toolbox'],
+    );
+    expect(args).toContain('--plugin-dir');
+    expect(args).toContain('/tmp/hub-toolbox');
+    expect(args[args.length - 1]).toBe('do work');
   });
 
   it('leaves the prompt untouched when tools are absent', () => {
     const args = buildCursorArgs(config, { cwd: '/repo', prompt: 'do work' });
     expect(args[args.length - 1]).toBe('do work');
+  });
+});
+
+describe('cursor runs with tools (fake CLI)', () => {
+  let dir: string;
+
+  beforeEach(async () => {
+    dir = await mkdtemp(join(tmpdir(), 'agent-runner-cursor-tools-'));
+  });
+
+  afterEach(async () => {
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  it('passes an ephemeral plugin to Cursor and cleans it up after the run', async () => {
+    const runner = new ProviderAgentRunner(configWithCursor(await writeFakeCursor(dir)));
+
+    const result = await runner.runProjectSession({
+      provider: 'cursor',
+      cwd: dir,
+      prompt: 'work',
+      tools: TOOLS,
+    });
+
+    expect(result.ok).toBe(true);
+    const argv: string[] = JSON.parse(await readFile(join(dir, 'argv.json'), 'utf8'));
+    expect(argv).toContain('--approve-mcps');
+    expect(argv).toContain('--plugin-dir');
+    expect(argv[argv.length - 1]).toBe('work');
+
+    const pluginDir = argv[argv.indexOf('--plugin-dir') + 1]!;
+    const seen = JSON.parse(await readFile(join(dir, 'seen.json'), 'utf8'));
+    expect(seen.skillMd).toContain('name: my-skill');
+    expect(seen.mcp.mcpServers['aws-tools'].env.AWS_KEY).toBe('secret-value');
+    expect(existsSync(pluginDir)).toBe(false);
   });
 });
 
@@ -250,6 +319,49 @@ function configWithClaude(cliPath: string): AgentRunnerConfig {
       },
     },
   };
+}
+
+function configWithCursor(cliPath: string): AgentRunnerConfig {
+  const config = configWithClaude('claude');
+  return {
+    ...config,
+    defaultProvider: 'cursor',
+    providers: {
+      ...config.providers,
+      cursor: { ...config.providers.cursor, cliPath },
+    },
+  };
+}
+
+async function writeFakeCursor(dir: string): Promise<string> {
+  const script = join(dir, 'fake-agent.mjs');
+  await writeFile(
+    script,
+    `
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+const argv = process.argv.slice(2);
+writeFileSync(join(process.cwd(), 'argv.json'), JSON.stringify(argv));
+const pluginIdx = argv.indexOf('--plugin-dir');
+const pluginDir = argv[pluginIdx + 1];
+writeFileSync(join(process.cwd(), 'seen.json'), JSON.stringify({
+  skillMd: readFileSync(join(pluginDir, 'skills', 'my-skill', 'SKILL.md'), 'utf8'),
+  mcp: JSON.parse(readFileSync(join(pluginDir, 'mcp.json'), 'utf8')),
+}));
+console.log(JSON.stringify({
+  type: 'result',
+  subtype: 'success',
+  result: 'done',
+  session_id: 'fake-cursor-session',
+  duration_ms: 1,
+}));
+`,
+    'utf8',
+  );
+  if (process.platform !== 'win32') {
+    await chmod(script, 0o755);
+  }
+  return `node "${script}"`;
 }
 
 /**

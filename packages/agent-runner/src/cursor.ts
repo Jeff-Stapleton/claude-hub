@@ -1,6 +1,6 @@
 import type { CursorProviderConfig } from '@claude-hub/core';
 import { lastJsonObject, runProcess } from './process.js';
-import { renderSkillPreamble } from './toolMaterializer.js';
+import { materializeCursorTools } from './toolMaterializer.js';
 import type { RunProjectSessionOptions, RunProjectSessionResult } from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000;
@@ -26,13 +26,16 @@ export async function runCursorProjectSession(
 
   const command = config.cliPath?.trim() ? config.cliPath : 'agent';
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const args = buildCursorArgs(config, opts);
+  const materialized = opts.tools ? await materializeCursorTools(opts.tools) : undefined;
+  const args = buildCursorArgs(config, opts, materialized?.extraArgs);
   const proc = await runProcess({
     command,
     args,
     cwd: opts.cwd,
     timeoutMs,
     ...(opts.tools?.env ? { env: opts.tools.env } : {}),
+  }).finally(async () => {
+    await materialized?.cleanup();
   });
 
   if (proc.spawnError) {
@@ -108,6 +111,7 @@ export async function runCursorProjectSession(
 export function buildCursorArgs(
   config: CursorProviderConfig,
   opts: RunProjectSessionOptions,
+  toolArgs: string[] = [],
 ): string[] {
   const args = ['-p', '--output-format', 'json', '--model', config.model, '--workspace', opts.cwd];
 
@@ -117,18 +121,8 @@ export function buildCursorArgs(
   if (config.approveMcps) args.push('--approve-mcps');
   if (config.sandbox) args.push('--sandbox', config.sandbox);
   if (opts.extraArgs) args.push(...opts.extraArgs);
-
-  // Cursor has no per-run skill-loading flag, so assigned skills ride in as
-  // a prompt preamble. Assigned MCP servers are skipped: the only discovery
-  // path is <workspace>/.cursor/mcp.json, and writing into the user's repo
-  // is not acceptable — v1 documents that MCP applies to claude runs only.
-  if (opts.tools?.mcpServers.length) {
-    console.warn(
-      `[agent-runner] cursor run ignoring ${opts.tools.mcpServers.length} assigned MCP server(s); MCP assignment is claude-only`,
-    );
-  }
-  const preamble = opts.tools ? renderSkillPreamble(opts.tools.skills) : '';
-  args.push(preamble + opts.prompt);
+  args.push(...toolArgs);
+  args.push(opts.prompt);
 
   return args;
 }

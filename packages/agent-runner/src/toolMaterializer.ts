@@ -11,6 +11,14 @@ export interface MaterializedClaudeTools {
   cleanup: () => Promise<void>;
 }
 
+export interface MaterializedCursorTools {
+  /** Root temp dir holding the Cursor plugin; removed by cleanup(). */
+  dir: string;
+  /** Flags to append to the Cursor CLI invocation. */
+  extraArgs: string[];
+  cleanup: () => Promise<void>;
+}
+
 /**
  * Materializes one run's tool assignments into an ephemeral directory the
  * claude CLI can consume:
@@ -42,17 +50,16 @@ export async function materializeClaudeTools(
         JSON.stringify({ name: 'hub-toolbox', version: '0.0.0' }, null, 2),
         'utf8',
       );
-      for (const skill of tools.skills) {
-        const skillDir = join(pluginDir, 'skills', skill.name);
-        await mkdir(skillDir, { recursive: true });
-        await writeFile(join(skillDir, 'SKILL.md'), renderSkillMd(skill), 'utf8');
-      }
+      await writeSkills(pluginDir, tools.skills);
       extraArgs.push('--plugin-dir', toForwardSlashes(pluginDir));
     }
 
     if (tools.mcpServers.length > 0) {
       const mcpPath = join(dir, 'mcp.json');
-      await writeFile(mcpPath, JSON.stringify(buildMcpConfig(tools.mcpServers), null, 2), 'utf8');
+      await writeFile(mcpPath, JSON.stringify(buildMcpConfig(tools.mcpServers), null, 2), {
+        encoding: 'utf8',
+        mode: 0o600,
+      });
       extraArgs.push('--mcp-config', toForwardSlashes(mcpPath));
     }
     extraArgs.push('--strict-mcp-config');
@@ -66,6 +73,56 @@ export async function materializeClaudeTools(
     extraArgs,
     cleanup: () => rm(dir, { recursive: true, force: true }).catch(() => undefined),
   };
+}
+
+/**
+ * Materializes one run's assignments as an ephemeral Cursor plugin. Cursor
+ * discovers both skills and the root mcp.json through --plugin-dir, so the
+ * user's project and global Cursor configuration remain untouched.
+ */
+export async function materializeCursorTools(
+  tools: RunToolAssignments,
+): Promise<MaterializedCursorTools> {
+  const dir = await mkdtemp(join(tmpdir(), 'claude-hub-cursor-tools-'));
+  const pluginDir = join(dir, 'plugin');
+
+  try {
+    await mkdir(join(pluginDir, '.cursor-plugin'), { recursive: true });
+    await writeFile(
+      join(pluginDir, '.cursor-plugin', 'plugin.json'),
+      JSON.stringify({ name: 'hub-toolbox', version: '0.0.0' }, null, 2),
+      'utf8',
+    );
+    await writeSkills(pluginDir, tools.skills);
+
+    if (tools.mcpServers.length > 0) {
+      await writeFile(
+        join(pluginDir, 'mcp.json'),
+        JSON.stringify(buildMcpConfig(tools.mcpServers), null, 2),
+        { encoding: 'utf8', mode: 0o600 },
+      );
+    }
+  } catch (err) {
+    await rm(dir, { recursive: true, force: true }).catch(() => undefined);
+    throw err;
+  }
+
+  return {
+    dir,
+    extraArgs: ['--plugin-dir', toForwardSlashes(pluginDir)],
+    cleanup: () => rm(dir, { recursive: true, force: true }).catch(() => undefined),
+  };
+}
+
+async function writeSkills(
+  pluginDir: string,
+  skills: RunToolAssignments['skills'],
+): Promise<void> {
+  for (const skill of skills) {
+    const skillDir = join(pluginDir, 'skills', skill.name);
+    await mkdir(skillDir, { recursive: true });
+    await writeFile(join(skillDir, 'SKILL.md'), renderSkillMd(skill), 'utf8');
+  }
 }
 
 function renderSkillMd(skill: { name: string; description: string; body: string }): string {
@@ -92,19 +149,6 @@ function buildMcpConfig(servers: ResolvedMcpServer[]): {
           };
   }
   return { mcpServers };
-}
-
-/**
- * Renders assigned skills as a prompt preamble for providers with no
- * skill-loading mechanism (Cursor). Loses progressive disclosure but keeps
- * the assignment semantics identical across providers.
- */
-export function renderSkillPreamble(skills: RunToolAssignments['skills']): string {
-  if (skills.length === 0) return '';
-  const sections = skills.map(
-    (s) => `## ${s.name} — ${s.description}\n\n${s.body}`,
-  );
-  return `# Available skills\n\nUse these when relevant to the task.\n\n${sections.join('\n\n')}\n\n---\n\n`;
 }
 
 function toForwardSlashes(p: string): string {
