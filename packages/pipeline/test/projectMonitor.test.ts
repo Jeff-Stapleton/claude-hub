@@ -216,8 +216,9 @@ describe('ProjectMonitorScheduler', () => {
     scheduler = new ProjectMonitorScheduler(store, runner, agentRunner);
     scheduler.start();
 
-    await tick(60_000, 1); // first failing tick
-    await tick(60_000, 1); // second failing tick
+    await tick(60_000, 1); // first failing tick — below the threshold
+    expect(enqueue).not.toHaveBeenCalled();
+    await tick(60_000, 1); // second failing tick reaches the threshold
     expect(enqueue).toHaveBeenCalledTimes(1);
     expect(enqueue).toHaveBeenCalledWith(
       expect.objectContaining({ source: 'monitor', sourceRef: 'project-monitor:c1' }),
@@ -231,10 +232,50 @@ describe('ProjectMonitorScheduler', () => {
     expect(store.monitors()[0]?.status.outageOpen).toBe(false);
     expect(projectMonitorHealth(store.monitors()[0]!)).toBe('healthy');
 
-    // …so the next outage files a second defect.
+    // …so the next outage (again two consecutive fails) files a second defect.
     runProjectSession.mockResolvedValue(failResult);
     await tick(60_000, 1);
+    await tick(60_000, 1);
     expect(enqueue).toHaveBeenCalledTimes(2);
+  });
+
+  it('a single blip never files: one fail then recovery resets the counter', async () => {
+    await store.update('monitors', [
+      monitorEntry([agentCheck('c1', 1)], { status: passedStatus(['c1']) }),
+    ]);
+    runProjectSession.mockResolvedValue(failResult);
+
+    scheduler = new ProjectMonitorScheduler(store, runner, agentRunner);
+    scheduler.start();
+
+    await tick(60_000, 1);
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(store.monitors()[0]?.status.checks['c1']?.consecutiveFails).toBe(1);
+
+    runProjectSession.mockResolvedValue(passResult);
+    await tick(60_000, 1);
+    expect(store.monitors()[0]?.status.checks['c1']?.consecutiveFails).toBe(0);
+
+    // The next isolated fail starts counting from scratch — still no defect.
+    runProjectSession.mockResolvedValue(failResult);
+    await tick(60_000, 1);
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('honors a per-monitor defectAfterConsecutiveFails override of 1', async () => {
+    await store.update('monitors', [
+      monitorEntry([agentCheck('c1', 1)], {
+        defectAfterConsecutiveFails: 1,
+        status: passedStatus(['c1']),
+      }),
+    ]);
+    runProjectSession.mockResolvedValue(failResult);
+
+    scheduler = new ProjectMonitorScheduler(store, runner, agentRunner);
+    scheduler.start();
+
+    await tick(60_000, 1);
+    expect(enqueue).toHaveBeenCalledTimes(1);
   });
 
   it('files one defect when two checks fail together', async () => {
@@ -248,7 +289,83 @@ describe('ProjectMonitorScheduler', () => {
     scheduler = new ProjectMonitorScheduler(store, runner, agentRunner);
     scheduler.start();
 
-    await tick(60_000, 2); // both checks tick and persist
+    await tick(60_000, 2); // both checks tick and persist — below the threshold
+    await tick(60_000, 2); // both reach the threshold in the same window
+    expect(enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it('discards a suspension-flagged failure as inconclusive after one re-run', async () => {
+    await store.update('monitors', [
+      monitorEntry([agentCheck('c1', 1)], { status: passedStatus(['c1']) }),
+    ]);
+    // Every attempt simulates the host sleeping mid-check: jump the mocked
+    // wall clock past the suspension gap, then fail. The detector's stop()
+    // observation sees the jump even though no heartbeat fired.
+    runProjectSession.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 60_000);
+      return failResult;
+    });
+
+    scheduler = new ProjectMonitorScheduler(store, runner, agentRunner);
+    scheduler.start();
+
+    await tick(60_000, 1);
+    // Suspended failure was re-run exactly once inside the single tick.
+    expect(runProjectSession).toHaveBeenCalledTimes(2);
+    const status = store.monitors()[0]?.status.checks['c1'];
+    expect(status?.lastStatus).toBe('inconclusive');
+    expect(status?.lastError).toContain('host slept during check');
+    expect(status?.consecutiveFails).toBe(0);
+    expect(enqueue).not.toHaveBeenCalled();
+    expect(projectMonitorHealth(store.monitors()[0]!)).toBe('unknown');
+  });
+
+  it('a suspended failure whose re-run passes records a pass', async () => {
+    await store.update('monitors', [
+      monitorEntry([agentCheck('c1', 1)], { status: passedStatus(['c1']) }),
+    ]);
+    runProjectSession
+      .mockImplementationOnce(async () => {
+        vi.setSystemTime(Date.now() + 60_000);
+        return failResult;
+      })
+      .mockResolvedValueOnce(passResult);
+
+    scheduler = new ProjectMonitorScheduler(store, runner, agentRunner);
+    scheduler.start();
+
+    await tick(60_000, 1);
+    expect(runProjectSession).toHaveBeenCalledTimes(2);
+    expect(store.monitors()[0]?.status.checks['c1']?.lastStatus).toBe('pass');
+    expect(enqueue).not.toHaveBeenCalled();
+  });
+
+  it('inconclusive neither resets nor extends an existing fail streak', async () => {
+    await store.update('monitors', [
+      monitorEntry([agentCheck('c1', 1)], { status: passedStatus(['c1']) }),
+    ]);
+    runProjectSession.mockResolvedValue(failResult);
+
+    scheduler = new ProjectMonitorScheduler(store, runner, agentRunner);
+    scheduler.start();
+
+    await tick(60_000, 1); // real fail #1
+    expect(store.monitors()[0]?.status.checks['c1']?.consecutiveFails).toBe(1);
+
+    // A sleep-straddled tick in the middle of the outage is discarded…
+    runProjectSession.mockImplementation(async () => {
+      vi.setSystemTime(Date.now() + 60_000);
+      return failResult;
+    });
+    await tick(60_000, 1);
+    expect(store.monitors()[0]?.status.checks['c1']?.consecutiveFails).toBe(1);
+    expect(enqueue).not.toHaveBeenCalled();
+
+    // …and the streak resumes on the next verifiable fail, filing the defect.
+    runProjectSession.mockReset();
+    runProjectSession.mockResolvedValue(failResult);
+    await tick(60_000, 1); // real fail #2
+    expect(store.monitors()[0]?.status.checks['c1']?.consecutiveFails).toBe(2);
     expect(enqueue).toHaveBeenCalledTimes(1);
   });
 

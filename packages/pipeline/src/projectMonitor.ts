@@ -9,10 +9,18 @@ import { runProjectCheck } from './projectChecks.js';
 import type { PipelineRunner } from './runner.js';
 
 /**
+ * Consecutive fails of one check required before an outage files a defect.
+ * Overridable per monitor via `defectAfterConsecutiveFails`.
+ */
+export const DEFAULT_DEFECT_AFTER_CONSECUTIVE_FAILS = 2;
+
+/**
  * Aggregate health across a monitor's checks: down if any check's last
  * result is a fail, healthy only when every configured check has passed,
  * unknown while any check is still awaiting its first result (or none are
- * configured). Mirrored in apps/web (which doesn't import core).
+ * configured). An `inconclusive` result (host slept mid-check) counts as
+ * not-yet-reported, not as a fail. Mirrored in apps/web (which doesn't
+ * import core).
  */
 export function projectMonitorHealth(
   monitor: Pick<ProjectMonitor, 'checks' | 'status'>,
@@ -132,6 +140,12 @@ export class ProjectMonitorScheduler {
       check,
     );
 
+    // A failure observed while the host slept mid-check is unverifiable —
+    // aborts and timeouts all fire late on wake. runProjectCheck already
+    // re-ran it once; a still-suspended failure is discarded as inconclusive
+    // rather than counted toward an outage.
+    const inconclusive = !res.ok && res.suspended;
+
     // Persist the result and decide defect filing inside one updater, so
     // two checks failing in the same window can't both open the outage.
     let fileDefect = false;
@@ -140,15 +154,36 @@ export class ProjectMonitorScheduler {
         if (m.projectId !== projectId) return m;
         if (!m.checks.some((c) => c.id === checkId)) return m; // removed mid-flight
         const prev = m.status.checks[checkId];
+        // Inconclusive neither resets nor increments, so a real outage
+        // interleaved with sleeps still accumulates toward the threshold.
+        const consecutiveFails = res.ok
+          ? 0
+          : (prev?.consecutiveFails ?? 0) + (inconclusive ? 0 : 1);
         m.status.checks[checkId] = {
-          lastStatus: res.ok ? 'pass' : 'fail',
+          lastStatus: res.ok ? 'pass' : inconclusive ? 'inconclusive' : 'fail',
           lastCheckedAt: new Date().toISOString(),
           lastDurationMs: res.durationMs,
           ...(res.output ? { lastOutput: res.output } : {}),
-          ...(res.error !== undefined ? { lastError: res.error } : {}),
-          consecutiveFails: res.ok ? 0 : (prev?.consecutiveFails ?? 0) + 1,
+          ...(inconclusive
+            ? {
+                lastError:
+                  'host slept during check — result discarded' +
+                  (res.error !== undefined ? ` (${res.error})` : ''),
+              }
+            : res.error !== undefined
+              ? { lastError: res.error }
+              : {}),
+          consecutiveFails,
         };
-        if (!res.ok && m.fileDefectOnFailure && !m.status.outageOpen) {
+        const threshold =
+          m.defectAfterConsecutiveFails ?? DEFAULT_DEFECT_AFTER_CONSECUTIVE_FAILS;
+        if (
+          !res.ok &&
+          !inconclusive &&
+          consecutiveFails >= threshold &&
+          m.fileDefectOnFailure &&
+          !m.status.outageOpen
+        ) {
           m.status.outageOpen = true;
           fileDefect = true;
         }
@@ -162,6 +197,12 @@ export class ProjectMonitorScheduler {
     );
 
     if (res.ok) return;
+    if (inconclusive) {
+      console.warn(
+        `[monitor] ${project.name}: check "${check.name}" ran while the host slept — result discarded`,
+      );
+      return;
+    }
     console.warn(
       `[monitor] ${project.name}: check "${check.name}" failed: ${res.error ?? 'unknown'}`,
     );

@@ -69,6 +69,30 @@ describe('web api client', () => {
     expect(headers.has('content-type')).toBe(false);
   });
 
+  it('updateCronTrigger PATCHes all editable fields to the encoded trigger URL', async () => {
+    await api.updateCronTrigger({
+      id: 'cron 1',
+      name: 'nightly',
+      projectId: 'proj-2',
+      prompt: 'check everything',
+      cronExpr: '0 2 * * *',
+      provider: null,
+      enabled: false,
+    });
+
+    const call = calls.at(-1);
+    expect(call?.url).toBe('/api/triggers/cron%201');
+    expect(call?.init?.method).toBe('PATCH');
+    expect(JSON.parse(String(call?.init?.body))).toEqual({
+      name: 'nightly',
+      projectId: 'proj-2',
+      prompt: 'check everything',
+      cronExpr: '0 2 * * *',
+      provider: null,
+      enabled: false,
+    });
+  });
+
   it('throws an Error including status code and response body on non-2xx', async () => {
     nextResponse = { ok: false, status: 400, statusText: 'Bad Request', body: '{"error":"nope"}' };
     await expect(

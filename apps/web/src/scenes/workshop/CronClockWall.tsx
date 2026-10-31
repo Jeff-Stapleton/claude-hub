@@ -106,9 +106,11 @@ function Clock({
   const { h, m } = cronHands(trigger.cronExpr);
   const minute = handTip(c, (m / 60) * 360, 15);
   const hour = handTip(c, (((h % 12) + m / 60) / 12) * 360, 9.5);
+  const isEnabled = trigger.enabled !== false;
 
   return (
-    <g>
+    <g opacity={isEnabled ? 1 : 0.45}>
+      <title>{`${trigger.name}${isEnabled ? '' : ' (paused)'}`}</title>
       {/* Bezel + cream face */}
       <circle cx={c.x} cy={c.y} r={BEZEL_R} fill="#3a2b1c" stroke="#1a110a" strokeWidth={2} />
       <circle cx={c.x} cy={c.y} r={FACE_R} fill="#e8d6b0" stroke="#8a7050" strokeWidth={1} />
@@ -128,7 +130,14 @@ function Clock({
       <circle cx={c.x} cy={c.y} r={1.8} fill="#2a1a10" />
 
       {/* Status LED at the bezel's upper right */}
-      <circle cx={c.x + 17} cy={c.y - 17} r={2.8} fill={statusColor(trigger.lastStatus)} stroke="#1a110a" strokeWidth={0.8} />
+      <circle
+        cx={c.x + 17}
+        cy={c.y - 17}
+        r={2.8}
+        fill={isEnabled ? statusColor(trigger.lastStatus) : '#5a5a5a'}
+        stroke="#1a110a"
+        strokeWidth={0.8}
+      />
 
       {/* Nameplate under the clock */}
       <polygon

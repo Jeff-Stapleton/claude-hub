@@ -66,6 +66,23 @@ describe('CronScheduler', () => {
     expect(scheduledTasks[0]?.expr).toBe('0 18 * * *');
   });
 
+  it('does not schedule a paused trigger', async () => {
+    await store.update('triggers', () => [makeTrigger({ enabled: false })]);
+    expect(scheduledTasks).toHaveLength(0);
+  });
+
+  it('unschedules when paused and schedules again when resumed', async () => {
+    await store.update('triggers', () => [makeTrigger()]);
+    const firstStop = scheduledTasks[0]!.stop;
+
+    await store.update('triggers', () => [makeTrigger({ enabled: false })]);
+    expect(firstStop).toHaveBeenCalledOnce();
+    expect(scheduledTasks).toHaveLength(1);
+
+    await store.update('triggers', () => [makeTrigger({ enabled: true })]);
+    expect(scheduledTasks).toHaveLength(2);
+  });
+
   it('unschedules the task when the trigger is deleted', async () => {
     await store.update('triggers', () => [makeTrigger()]);
     const stopFn = scheduledTasks[0]!.stop;
@@ -105,17 +122,47 @@ describe('CronScheduler', () => {
     warnSpy.mockRestore();
   });
 
-  it('invokes runner.run with the trigger when the scheduled task fires', async () => {
+  it('invokes runner.run with the latest trigger data without rescheduling', async () => {
     const trigger = makeTrigger();
     await store.update('triggers', () => [trigger]);
+    await store.update('triggers', (triggers) =>
+      triggers.map((current) =>
+        current.id === trigger.id
+          ? { ...current, prompt: 'updated prompt', projectId: 'proj-2', provider: 'cursor' }
+          : current,
+      ),
+    );
+    expect(scheduledTasks).toHaveLength(1);
 
     // Simulate cron firing by invoking the captured callback directly.
     scheduledTasks[0]!.cb();
 
     expect(fakeRunner.run).toHaveBeenCalledWith(
-      expect.objectContaining({ id: trigger.id, cronExpr: trigger.cronExpr }),
+      expect.objectContaining({
+        id: trigger.id,
+        cronExpr: trigger.cronExpr,
+        prompt: 'updated prompt',
+        projectId: 'proj-2',
+        provider: 'cursor',
+      }),
     );
   });
+
+  it.each(['disabled', 'deleted'])(
+    'ignores a callback whose trigger was just %s',
+    async (state) => {
+      const trigger = makeTrigger();
+      await store.update('triggers', () => [trigger]);
+      const callback = scheduledTasks[0]!.cb;
+
+      await store.update('triggers', () =>
+        state === 'disabled' ? [makeTrigger({ enabled: false })] : [],
+      );
+      callback();
+
+      expect(fakeRunner.run).not.toHaveBeenCalled();
+    },
+  );
 
   it('ignores non-cron triggers (webhook entries do not schedule)', async () => {
     await store.update('triggers', () => [

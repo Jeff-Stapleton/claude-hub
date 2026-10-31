@@ -47,6 +47,11 @@ export class CronScheduler {
     for (const trigger of crons) {
       seen.add(trigger.id);
 
+      if (trigger.enabled === false) {
+        this.unschedule(trigger.id);
+        continue;
+      }
+
       // Validate cron expression; skip with a warn if invalid (a bad edit
       // in the UI shouldn't crash the server).
       if (!cron.validate(trigger.cronExpr)) {
@@ -63,7 +68,14 @@ export class CronScheduler {
       this.unschedule(trigger.id);
 
       const task = cron.schedule(trigger.cronExpr, () => {
-        void this.runner.run(trigger);
+        const current = this.store
+          .triggers()
+          .find(
+            (candidate): candidate is CronTrigger =>
+              candidate.id === trigger.id && candidate.type === 'cron',
+          );
+        if (!current || current.enabled === false) return;
+        void this.runner.run(current);
       });
       this.tasks.set(trigger.id, task);
       this.expressions.set(trigger.id, trigger.cronExpr);

@@ -177,6 +177,15 @@ export interface WebhookCreateResponse {
   url: string;
 }
 
+export interface UpdateCronTriggerBody {
+  name?: string;
+  projectId?: string;
+  prompt?: string;
+  cronExpr?: string;
+  provider?: AgentProviderId | null;
+  enabled?: boolean;
+}
+
 export const api = {
   getState: () => req<UIState>('/api/state'),
   saveDiscord: (body: { botToken?: string; allowedUserIds?: string[] }) =>
@@ -252,6 +261,11 @@ export const api = {
     req<Trigger>(`/api/triggers/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       body: JSON.stringify({ provider }),
+    }),
+  updateCronTrigger: ({ id, ...body }: { id: string } & UpdateCronTriggerBody) =>
+    req<CronTrigger>(`/api/triggers/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      body: JSON.stringify(body),
     }),
   deleteTrigger: (id: string) =>
     req<{ ok: true }>(`/api/triggers/${encodeURIComponent(id)}`, { method: 'DELETE' }),

@@ -16,12 +16,23 @@ export const DEFAULT_HTTP_CHECK_TIMEOUT_MS = 10_000;
 export const DEFAULT_COMMAND_CHECK_TIMEOUT_MS = 5 * 60_000;
 export const DEFAULT_AGENT_CHECK_TIMEOUT_MS = 30 * 60_000;
 
+/**
+ * A heartbeat tick (or the final stop() observation) arriving this much late
+ * means the host slept/suspended mid-check — on a laptop, Power Nap freezes
+ * the whole process, so every timeout in flight fires late on wake and a
+ * healthy target reads as timed out.
+ */
+export const SUSPENSION_GAP_MS = 30_000;
+const HEARTBEAT_INTERVAL_MS = 1_000;
+
 export interface CheckRunResult {
   ok: boolean;
   /** Truncated to CHECK_OUTPUT_LIMIT. */
   output: string;
   error?: string;
   durationMs: number;
+  /** The host appears to have slept during the run — timings are unreliable. */
+  suspended: boolean;
 }
 
 export interface ProjectCheckDeps {
@@ -34,12 +45,64 @@ export interface ProjectCheckDeps {
  * a work item: there is no template context, no session resume (every agent
  * check is a fresh run so context never accretes), and no JSONL history —
  * the truncated result on the monitor entity is the record.
+ *
+ * A failure observed while the host slept mid-check is unverifiable, so it
+ * is re-run once immediately (this code executing proves the host is awake
+ * now). A second suspended failure returns as-is with `suspended: true` and
+ * the scheduler records it as inconclusive instead of a fail.
  */
 export async function runProjectCheck(
   deps: ProjectCheckDeps,
   project: Project,
   check: ProjectMonitorCheck,
 ): Promise<CheckRunResult> {
+  const first = await runCheckAttempt(deps, project, check);
+  if (first.ok || !first.suspended) return first;
+  return runCheckAttempt(deps, project, check);
+}
+
+async function runCheckAttempt(
+  deps: ProjectCheckDeps,
+  project: Project,
+  check: ProjectMonitorCheck,
+): Promise<CheckRunResult> {
+  const detector = startSuspensionDetector();
+  // runCheckOnce never throws — its own catch converts errors to a result.
+  const res = await runCheckOnce(deps, project, check);
+  return { ...res, suspended: detector.stop() };
+}
+
+/**
+ * Wall-clock heartbeat. Comparing hrtime to Date.now() would be simpler but
+ * assumes the monotonic clock pauses during sleep, which varies by platform;
+ * a late-arriving timer tick has no such ambiguity. The gap is also checked
+ * at stop() so a sleep near the end of a check is caught even if no further
+ * heartbeat fires.
+ */
+function startSuspensionDetector(): { stop(): boolean } {
+  let last = Date.now();
+  let suspended = false;
+  const observe = (): void => {
+    const now = Date.now();
+    if (now - last > SUSPENSION_GAP_MS) suspended = true;
+    last = now;
+  };
+  const timer = setInterval(observe, HEARTBEAT_INTERVAL_MS);
+  timer.unref?.();
+  return {
+    stop(): boolean {
+      clearInterval(timer);
+      observe();
+      return suspended;
+    },
+  };
+}
+
+async function runCheckOnce(
+  deps: ProjectCheckDeps,
+  project: Project,
+  check: ProjectMonitorCheck,
+): Promise<Omit<CheckRunResult, 'suspended'>> {
   const started = Date.now();
   try {
     switch (check.type) {
@@ -81,7 +144,7 @@ async function runHttpCheck(
   expectedStatus: number | undefined,
   timeoutMs: number | undefined,
   started: number,
-): Promise<CheckRunResult> {
+): Promise<Omit<CheckRunResult, 'suspended'>> {
   const res = await fetch(url, {
     signal: AbortSignal.timeout(timeoutMs ?? DEFAULT_HTTP_CHECK_TIMEOUT_MS),
     redirect: 'follow',
@@ -108,7 +171,7 @@ async function runAgentCheck(
   project: Project,
   check: Extract<ProjectMonitorCheck, { type: 'agent' }>,
   started: number,
-): Promise<CheckRunResult> {
+): Promise<Omit<CheckRunResult, 'suspended'>> {
   const provider = check.provider ?? deps.store.config().defaultProvider;
   // Project-level skills/MCP servers apply via the union; the check itself
   // carries no tool assignments of its own.

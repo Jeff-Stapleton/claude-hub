@@ -148,6 +148,8 @@ export interface CronTrigger {
   prompt: string;
   /** Standard 5-field cron expression (node-cron compatible). */
   cronExpr: string;
+  /** Absent on legacy records means enabled. */
+  enabled?: boolean;
   /**
    * Falls back to config.defaultProvider. Ignored for `mode: 'enqueue'`,
    * where each machine resolves its own provider.
@@ -453,7 +455,8 @@ export interface AgentMonitorCheck extends ProjectMonitorCheckBase {
 export type ProjectMonitorCheck = HttpMonitorCheck | CommandMonitorCheck | AgentMonitorCheck;
 
 export interface MonitorCheckStatus {
-  lastStatus: 'pass' | 'fail';
+  /** `inconclusive`: the host slept mid-check, so the sample was discarded. */
+  lastStatus: 'pass' | 'fail' | 'inconclusive';
   lastCheckedAt: ISODateString;
   lastDurationMs?: number;
   /** Truncated check output for the config panel; full detail is not kept. */
@@ -480,6 +483,13 @@ export interface ProjectMonitor {
   checks: ProjectMonitorCheck[];
   /** File a `source: 'monitor'` defect work item once per outage. */
   fileDefectOnFailure: boolean;
+  /**
+   * Consecutive fails of a single check required before the defect files.
+   * Default 2: a one-off blip (network flap, redeploy, a sleep the
+   * suspension detector missed) self-heals on the next interval instead of
+   * paging anyone.
+   */
+  defectAfterConsecutiveFails?: number;
   status: ProjectMonitorStatus;
   createdAt: ISODateString;
   updatedAt: ISODateString;

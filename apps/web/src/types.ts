@@ -114,6 +114,8 @@ export interface CronTrigger {
   projectId: string;
   prompt: string;
   cronExpr: string;
+  /** Absent on legacy records means enabled. */
+  enabled?: boolean;
   /** Falls back to config.defaultProvider. */
   provider?: AgentProviderId;
   notify?: { channelId: string };
@@ -368,7 +370,8 @@ export interface AgentMonitorCheck extends ProjectMonitorCheckBase {
 export type ProjectMonitorCheck = HttpMonitorCheck | CommandMonitorCheck | AgentMonitorCheck;
 
 export interface MonitorCheckStatus {
-  lastStatus: 'pass' | 'fail';
+  /** `inconclusive`: the host slept mid-check, so the sample was discarded. */
+  lastStatus: 'pass' | 'fail' | 'inconclusive';
   lastCheckedAt: string;
   lastDurationMs?: number;
   lastOutput?: string;
@@ -381,6 +384,8 @@ export interface ProjectMonitor {
   enabled: boolean;
   checks: ProjectMonitorCheck[];
   fileDefectOnFailure: boolean;
+  /** Consecutive fails of a single check before a defect files (default 2). */
+  defectAfterConsecutiveFails?: number;
   status: {
     checks: Record<string, MonitorCheckStatus>;
     outageOpen: boolean;
@@ -394,7 +399,10 @@ export type ProjectMonitorHealth = 'healthy' | 'down' | 'unknown';
 /** The factory light over a SHIPPED door: ghost until a monitor is live. */
 export type FactoryLightState = 'ghost' | ProjectMonitorHealth;
 
-/** Mirror of the server's aggregate-health rule (web doesn't import core). */
+/**
+ * Mirror of the server's aggregate-health rule (web doesn't import core).
+ * `inconclusive` counts as not-yet-reported, not as a fail.
+ */
 export function projectMonitorHealth(
   monitor: Pick<ProjectMonitor, 'checks' | 'status'>,
 ): ProjectMonitorHealth {

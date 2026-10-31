@@ -467,6 +467,14 @@ function CheckStatusLine({ status }: { status: MonitorCheckStatus | undefined })
   if (status.lastStatus === 'pass') {
     return <div style={{ ...statusLine, color: '#5ec27a' }}>pass {ago}</div>;
   }
+  if (status.lastStatus === 'inconclusive') {
+    return (
+      <div style={{ ...statusLine, color: '#e8b04a' }}>
+        inconclusive {ago}
+        {status.lastError ? ` — ${status.lastError}` : ''}
+      </div>
+    );
+  }
   return (
     <div style={{ ...statusLine, color: '#cf4040' }}>
       fail {ago}

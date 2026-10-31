@@ -29,6 +29,11 @@ interface CreateWebhookBody {
 }
 
 interface UpdateTriggerBody {
+  name?: string;
+  projectId?: string;
+  prompt?: string;
+  cronExpr?: string;
+  enabled?: boolean;
   /** A provider sets the override; null clears it back to the default. */
   provider?: AgentProviderId | null;
 }
@@ -87,6 +92,7 @@ export async function registerTriggerRoutes(
       projectId,
       prompt,
       cronExpr,
+      enabled: true,
       ...(provider !== undefined ? { provider } : {}),
       ...(mode !== undefined ? { mode } : {}),
       ...(notify ? { notify } : {}),
@@ -98,22 +104,72 @@ export async function registerTriggerRoutes(
   app.patch<{ Params: { id: string }; Body: UpdateTriggerBody }>(
     '/api/triggers/:id',
     async (req, reply) => {
-      const { provider } = req.body ?? ({} as UpdateTriggerBody);
+      const { name, projectId, prompt, cronExpr, enabled, provider } =
+        req.body ?? ({} as UpdateTriggerBody);
       if (provider !== null && !validProvider(provider)) {
         return reply.code(400).send({ error: 'provider must be "claude" or "cursor"' });
       }
-      if (!store.triggers().some((t) => t.id === req.params.id)) {
+      const existing = store.triggers().find((t) => t.id === req.params.id);
+      if (!existing) {
         return reply.code(404).send({ error: 'not found' });
+      }
+
+      const hasCronFields =
+        name !== undefined ||
+        projectId !== undefined ||
+        prompt !== undefined ||
+        cronExpr !== undefined ||
+        enabled !== undefined;
+      if (existing.type !== 'cron' && hasCronFields) {
+        return reply.code(400).send({ error: 'cron fields can only update cron triggers' });
+      }
+
+      if (existing.type === 'cron') {
+        if (name !== undefined && (typeof name !== 'string' || !name.trim())) {
+          return reply.code(400).send({ error: 'name must be a non-empty string' });
+        }
+        if (projectId !== undefined) {
+          if (typeof projectId !== 'string' || !projectId.trim()) {
+            return reply.code(400).send({ error: 'projectId must be a non-empty string' });
+          }
+          if (!store.projects().some((project) => project.id === projectId)) {
+            return reply.code(400).send({ error: `unknown projectId: ${projectId}` });
+          }
+        }
+        if (prompt !== undefined && (typeof prompt !== 'string' || !prompt.trim())) {
+          return reply.code(400).send({ error: 'prompt must be a non-empty string' });
+        }
+        if (cronExpr !== undefined) {
+          if (typeof cronExpr !== 'string' || !cronExpr.trim() || !cron.validate(cronExpr.trim())) {
+            return reply.code(400).send({ error: `invalid cron expression: ${String(cronExpr)}` });
+          }
+        }
+        if (enabled !== undefined && typeof enabled !== 'boolean') {
+          return reply.code(400).send({ error: 'enabled must be a boolean' });
+        }
       }
 
       await store.update('triggers', (current) =>
         current.map((t) => {
-          if (t.id !== req.params.id || provider === undefined) return t;
+          if (t.id !== req.params.id) return t;
+
+          const edited =
+            t.type === 'cron'
+              ? {
+                  ...t,
+                  ...(name !== undefined ? { name: name.trim() } : {}),
+                  ...(projectId !== undefined ? { projectId: projectId.trim() } : {}),
+                  ...(prompt !== undefined ? { prompt: prompt.trim() } : {}),
+                  ...(cronExpr !== undefined ? { cronExpr: cronExpr.trim() } : {}),
+                  ...(enabled !== undefined ? { enabled } : {}),
+                }
+              : t;
+
           if (provider === null) {
-            const { provider: _cleared, ...rest } = t;
+            const { provider: _cleared, ...rest } = edited;
             return rest as Trigger;
           }
-          return { ...t, provider };
+          return provider === undefined ? edited : { ...edited, provider };
         }),
       );
 

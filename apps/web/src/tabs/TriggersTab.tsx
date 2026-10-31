@@ -185,6 +185,7 @@ function CronList({
           <th style={th}>Project</th>
           <th style={th}>Cron</th>
           <th style={th}>Harness</th>
+          <th style={th}>Schedule</th>
           <th style={th}>Last run</th>
           <th style={th}>Status</th>
           <th style={th}></th>
@@ -195,6 +196,7 @@ function CronList({
           <CronRow
             key={c.id}
             trigger={c}
+            projects={projects}
             projectName={nameFor(c.projectId)}
             onDelete={() => del.mutate(c.id)}
             onRunNow={() => runNow.mutate(c.id)}
@@ -207,17 +209,34 @@ function CronList({
 
 function CronRow({
   trigger,
+  projects,
   projectName,
   onDelete,
   onRunNow,
 }: {
   trigger: CronTrigger;
+  projects: Project[];
   projectName: string;
   onDelete: () => void;
   onRunNow: () => void;
 }): JSX.Element {
+  const qc = useQueryClient();
   const [showRuns, setShowRuns] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<CronDraft>(() => cronDraft(trigger));
   const isRunning = trigger.lastStatus === 'running';
+  const isEnabled = trigger.enabled !== false;
+  const save = useMutation({
+    mutationFn: api.updateCronTrigger,
+    onSuccess: () => {
+      setEditing(false);
+      void qc.invalidateQueries({ queryKey: ['state'] });
+    },
+  });
+  const toggle = useMutation({
+    mutationFn: api.updateCronTrigger,
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ['state'] }),
+  });
   const runs = useQuery({
     queryKey: ['runs', trigger.id],
     queryFn: () => api.listRuns(trigger.id),
@@ -238,13 +257,31 @@ function CronRow({
           <code>{trigger.cronExpr}</code>
         </td>
         <td style={td}>
-          <HarnessCell trigger={trigger} />
+          {trigger.provider ?? 'default'}
+        </td>
+        <td style={td}>
+          <ScheduleBadge enabled={isEnabled} />
         </td>
         <td style={td}>{trigger.lastRun ? new Date(trigger.lastRun).toLocaleString() : '—'}</td>
         <td style={td}>
           <StatusBadge status={trigger.lastStatus} />
         </td>
         <td style={td}>
+          <button
+            onClick={() => {
+              setDraft(cronDraft(trigger));
+              setEditing(true);
+            }}
+            disabled={save.isPending}
+          >
+            Edit
+          </button>{' '}
+          <button
+            onClick={() => toggle.mutate({ id: trigger.id, enabled: !isEnabled })}
+            disabled={toggle.isPending}
+          >
+            {toggle.isPending ? 'Saving...' : isEnabled ? 'Pause' : 'Resume'}
+          </button>{' '}
           <button onClick={onRunNow} disabled={isRunning}>
             {isRunning ? 'Running...' : 'Run now'}
           </button>{' '}
@@ -252,11 +289,111 @@ function CronRow({
             {showRuns ? 'Hide runs' : 'Runs'}
           </button>{' '}
           <button onClick={onDelete}>Delete</button>
+          {toggle.error ? (
+            <div style={{ color: 'crimson', marginTop: 4, fontSize: 11 }}>
+              {String(toggle.error)}
+            </div>
+          ) : null}
         </td>
       </tr>
+      {editing ? (
+        <tr>
+          <td colSpan={8} style={td}>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (
+                  !draft.name.trim() ||
+                  !draft.projectId ||
+                  !draft.cronExpr.trim() ||
+                  !draft.prompt.trim()
+                ) {
+                  return;
+                }
+                save.mutate({
+                  id: trigger.id,
+                  name: draft.name.trim(),
+                  projectId: draft.projectId,
+                  cronExpr: draft.cronExpr.trim(),
+                  prompt: draft.prompt.trim(),
+                  provider: draft.provider === '' ? null : draft.provider,
+                });
+              }}
+              style={editForm}
+            >
+              <label style={editField}>
+                Name
+                <input
+                  value={draft.name}
+                  onChange={(e) => setDraft((current) => ({ ...current, name: e.target.value }))}
+                />
+              </label>
+              <label style={editField}>
+                Project
+                <select
+                  value={draft.projectId}
+                  onChange={(e) =>
+                    setDraft((current) => ({ ...current, projectId: e.target.value }))
+                  }
+                >
+                  {projects.map((project) => (
+                    <option key={project.id} value={project.id}>
+                      {project.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={editField}>
+                Cron expression
+                <input
+                  value={draft.cronExpr}
+                  onChange={(e) =>
+                    setDraft((current) => ({ ...current, cronExpr: e.target.value }))
+                  }
+                />
+              </label>
+              <label style={editField}>
+                Provider
+                <HarnessSelect
+                  value={draft.provider}
+                  onChange={(provider) => setDraft((current) => ({ ...current, provider }))}
+                />
+              </label>
+              <label style={{ ...editField, gridColumn: '1 / -1' }}>
+                Prompt
+                <textarea
+                  value={draft.prompt}
+                  onChange={(e) => setDraft((current) => ({ ...current, prompt: e.target.value }))}
+                  rows={4}
+                />
+              </label>
+              <div style={{ gridColumn: '1 / -1' }}>
+                <button
+                  type="submit"
+                  disabled={
+                    save.isPending ||
+                    !draft.name.trim() ||
+                    !draft.projectId ||
+                    !draft.cronExpr.trim() ||
+                    !draft.prompt.trim()
+                  }
+                >
+                  {save.isPending ? 'Saving...' : 'Save'}
+                </button>{' '}
+                <button type="button" onClick={() => setEditing(false)} disabled={save.isPending}>
+                  Cancel
+                </button>
+                {save.error ? (
+                  <span style={{ color: 'crimson', marginLeft: 8 }}>{String(save.error)}</span>
+                ) : null}
+              </div>
+            </form>
+          </td>
+        </tr>
+      ) : null}
       {showRuns ? (
         <tr>
-          <td colSpan={7} style={td}>
+          <td colSpan={8} style={td}>
             {runs.isLoading ? (
               <em>Loading…</em>
             ) : runs.data && runs.data.length > 0 ? (
@@ -277,6 +414,42 @@ function CronRow({
         </tr>
       ) : null}
     </>
+  );
+}
+
+interface CronDraft {
+  name: string;
+  projectId: string;
+  cronExpr: string;
+  prompt: string;
+  provider: '' | AgentProviderId;
+}
+
+function cronDraft(trigger: CronTrigger): CronDraft {
+  return {
+    name: trigger.name,
+    projectId: trigger.projectId,
+    cronExpr: trigger.cronExpr,
+    prompt: trigger.prompt,
+    provider: trigger.provider ?? '',
+  };
+}
+
+function ScheduleBadge({ enabled }: { enabled: boolean }): JSX.Element {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        padding: '1px 8px',
+        borderRadius: 10,
+        background: enabled ? '#28633d' : '#555',
+        color: '#fff',
+        fontSize: 11,
+        fontWeight: 600,
+      }}
+    >
+      {enabled ? 'active' : 'paused'}
+    </span>
   );
 }
 
@@ -504,6 +677,17 @@ const th: React.CSSProperties = {
   fontWeight: 600,
 };
 const td: React.CSSProperties = { borderBottom: '1px solid #222', padding: '6px 8px' };
+const editForm: React.CSSProperties = {
+  display: 'grid',
+  gridTemplateColumns: 'repeat(4, minmax(140px, 1fr))',
+  gap: 8,
+  padding: '6px 0',
+};
+const editField: React.CSSProperties = {
+  display: 'grid',
+  gap: 4,
+  fontSize: 12,
+};
 const runsPre: React.CSSProperties = {
   background: '#111',
   color: '#ddd',

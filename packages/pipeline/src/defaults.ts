@@ -130,7 +130,8 @@ const CODE_REVIEW_PROMPT =
   'still running, report WAIT and merge on a later tick. If GitLab refuses ' +
   'because the source branch has diverged, run gitlab_rebase_merge_request ' +
   'and report WAIT.\n' +
-  'd. Otherwise report WAIT, noting in one line what you are waiting for.\n\n' +
+  'd. NEVER approve an MR yourself. Only a human can approve an MR.\n' +
+  'e. Otherwise report WAIT, noting in one line what you are waiting for.\n\n' +
   '3. MR state is merged: report PASS. MR was closed without merging: ' +
   'report FAIL with the reason.\n\n' +
   'Request "{{title}}":\n{{request}}\n\n' +

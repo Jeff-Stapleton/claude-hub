@@ -412,6 +412,7 @@ describe('trigger routes', () => {
     const body = JSON.parse(res.body);
     expect(body.type).toBe('cron');
     expect(body.name).toBe('daily');
+    expect(body.enabled).toBe(true);
     expect(store.triggers()).toHaveLength(1);
   });
 
@@ -515,6 +516,85 @@ describe('trigger routes', () => {
     expect(store.triggers()[0]?.provider).toBeUndefined();
   });
 
+  it('PATCH /api/triggers/:id edits every user-configurable cron field', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: {
+        name: 'before',
+        projectId,
+        prompt: 'old prompt',
+        cronExpr: '0 9 * * *',
+        mode: 'enqueue',
+        notify: { channelId: 'discord' },
+      },
+    });
+    const created = JSON.parse(create.body);
+    const lastRun = new Date().toISOString();
+    await store.update('projects', (projects) => [
+      ...projects,
+      { id: 'proj-2', path: '/tmp/proj-2', addedAt: lastRun },
+    ]);
+    await store.update('triggers', (triggers) =>
+      triggers.map((trigger) =>
+        trigger.id === created.id ? { ...trigger, lastRun, lastStatus: 'success' } : trigger,
+      ),
+    );
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/triggers/${created.id}`,
+      payload: {
+        name: ' after ',
+        projectId: 'proj-2',
+        prompt: ' new prompt ',
+        cronExpr: ' */15 * * * * ',
+        provider: 'cursor',
+        enabled: false,
+      },
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(JSON.parse(res.body)).toMatchObject({
+      id: created.id,
+      type: 'cron',
+      name: 'after',
+      projectId: 'proj-2',
+      prompt: 'new prompt',
+      cronExpr: '*/15 * * * *',
+      provider: 'cursor',
+      enabled: false,
+      mode: 'enqueue',
+      notify: { channelId: 'discord' },
+      lastRun,
+      lastStatus: 'success',
+    });
+  });
+
+  it('PATCH /api/triggers/:id validates editable cron fields', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/cron',
+      payload: { name: 'patchable', projectId, prompt: 'x', cronExpr: '0 9 * * *' },
+    });
+    const id = JSON.parse(create.body).id;
+
+    for (const payload of [
+      { name: '   ' },
+      { projectId: 'missing-project' },
+      { prompt: '' },
+      { cronExpr: 'not a cron' },
+      { enabled: 'no' },
+    ]) {
+      const res = await app.inject({
+        method: 'PATCH',
+        url: `/api/triggers/${id}`,
+        payload,
+      });
+      expect(res.statusCode).toBe(400);
+    }
+  });
+
   it('PATCH /api/triggers/:id rejects an unknown provider', async () => {
     const create = await app.inject({
       method: 'POST',
@@ -561,7 +641,24 @@ describe('trigger routes', () => {
     expect(body.secretSet).toBe(true);
   });
 
-  it('POST /api/triggers/:id/run returns 202 with JSON body', async () => {
+  it('PATCH /api/triggers/:id rejects cron fields for webhooks', async () => {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/triggers/webhook',
+      payload: { name: 'wh', projectId, promptTemplate: 'x' },
+    });
+    const id = JSON.parse(create.body).id;
+
+    const res = await app.inject({
+      method: 'PATCH',
+      url: `/api/triggers/${id}`,
+      payload: { enabled: false },
+    });
+    expect(res.statusCode).toBe(400);
+    expect(JSON.parse(res.body).error).toMatch(/cron fields/);
+  });
+
+  it('POST /api/triggers/:id/run allows a paused cron to run manually', async () => {
     // Create a trigger first
     const create = await app.inject({
       method: 'POST',
@@ -574,6 +671,12 @@ describe('trigger routes', () => {
       },
     });
     const triggerId = JSON.parse(create.body).id;
+    await app.inject({
+      method: 'PATCH',
+      url: `/api/triggers/${triggerId}`,
+      payload: { enabled: false },
+    });
+    vi.mocked(mockRunner.run).mockReset();
 
     // Run-now: the body MUST be '{}', not empty — otherwise Fastify throws
     // FST_ERR_CTP_EMPTY_JSON_BODY because the content-type is
@@ -585,6 +688,9 @@ describe('trigger routes', () => {
     });
     expect(res.statusCode).toBe(202);
     expect(JSON.parse(res.body).ok).toBe(true);
+    expect(mockRunner.run).toHaveBeenCalledWith(
+      expect.objectContaining({ id: triggerId, enabled: false }),
+    );
   });
 
   it('POST /api/triggers/:id/run returns 404 for unknown trigger', async () => {
